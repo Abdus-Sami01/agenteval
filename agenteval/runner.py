@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import os
+import logging
 import random
 import subprocess
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from typing import Any, Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+from typing import Any
 
 from agenteval.graders.base import Grader
 from agenteval.types import (
@@ -18,6 +20,8 @@ from agenteval.types import (
     TaskResult,
     TaskSuite,
 )
+
+logger = logging.getLogger("agenteval")
 
 
 def detect_git_sha(path: str = ".") -> str:
@@ -43,8 +47,21 @@ def evaluate(
     notes: str = "",
     on_result: Callable[[TaskResult], None] | None = None,
     grader_for: Callable[[Task], Grader] | None = None,
+    progress: bool = False,
 ) -> EvalRun:
     random.seed(seed)
+
+    reporter = None
+    if progress:
+        from agenteval.progress import ProgressReporter
+
+        reporter = ProgressReporter(len(suite))
+        user_callback = on_result
+
+        def on_result(result: TaskResult) -> None:  # type: ignore[misc]
+            reporter.update(result)
+            if user_callback:
+                user_callback(result)
 
     metadata = RunMetadata(
         run_id=uuid.uuid4().hex[:12],
@@ -135,11 +152,44 @@ def evaluate(
             if on_result:
                 on_result(result)
 
-    return EvalRun(
+    if reporter is not None:
+        reporter.finish()
+
+    run = EvalRun(
         metadata=metadata,
         results=results,
         total_ms=(time.perf_counter() - start) * 1000,
     )
+    logger.info(
+        "evaluated %s on %s: %d/%d passed (%.1f%%) in %.0fms",
+        metadata.system_name, metadata.suite_name,
+        run.passed, run.passed + run.failed, run.pass_rate * 100, run.total_ms,
+    )
+    return run
+
+
+def iter_evaluate(
+    system: Callable[[Task], Any],
+    suite: TaskSuite,
+    grader: Grader,
+    seed: int = 0,
+    timeout_s: float = 0,
+    retries: int = 0,
+    system_name: str = "",
+) -> Iterator[TaskResult]:
+    """Yield results one task at a time.
+
+    Use this for suites too large to hold in memory, or to stream results
+    into a database or dashboard as they arrive. Nothing is accumulated,
+    so peak memory stays flat regardless of suite size.
+    """
+    for task in suite.tasks:
+        single = TaskSuite(name=suite.name, tasks=[task])
+        run = evaluate(
+            system, single, grader,
+            seed=seed, timeout_s=timeout_s, retries=retries, system_name=system_name,
+        )
+        yield from run.results
 
 
 def evaluate_many(

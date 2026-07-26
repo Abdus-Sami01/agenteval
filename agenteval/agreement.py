@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
+from typing import Any
 
+from agenteval.exceptions import PairedLengthError
 from agenteval.stats import Interval, wilson_interval
 from agenteval.types import Task
 
@@ -58,15 +60,15 @@ class AgreementReport:
 
 def cohens_kappa(a: Sequence[bool], b: Sequence[bool]) -> AgreementReport:
     if len(a) != len(b):
-        raise ValueError(f"rater sequences must be equal length, got {len(a)} and {len(b)}")
+        raise PairedLengthError(len(a), len(b), "cohens kappa")
     n = len(a)
     if n == 0:
         return AgreementReport(0, 0.0, 0.0, 0.0)
 
-    both_yes = sum(1 for x, y in zip(a, b) if x and y)
-    both_no = sum(1 for x, y in zip(a, b) if not x and not y)
-    a_only = sum(1 for x, y in zip(a, b) if x and not y)
-    b_only = sum(1 for x, y in zip(a, b) if not x and y)
+    both_yes = sum(1 for x, y in zip(a, b, strict=False) if x and y)
+    both_no = sum(1 for x, y in zip(a, b, strict=False) if not x and not y)
+    a_only = sum(1 for x, y in zip(a, b, strict=False) if x and not y)
+    b_only = sum(1 for x, y in zip(a, b, strict=False) if not x and y)
 
     observed = (both_yes + both_no) / n
     p_a_yes = (both_yes + a_only) / n
@@ -92,11 +94,11 @@ def cohens_kappa(a: Sequence[bool], b: Sequence[bool]) -> AgreementReport:
 def percent_agreement(a: Sequence[Any], b: Sequence[Any]) -> float:
     if len(a) != len(b) or not a:
         return 0.0
-    return sum(1 for x, y in zip(a, b) if x == y) / len(a)
+    return sum(1 for x, y in zip(a, b, strict=False) if x == y) / len(a)
 
 
 def krippendorff_alpha(ratings: Sequence[Sequence[Any]]) -> float:
-    columns = [[r for r in col if r is not None] for col in zip(*ratings)] if ratings else []
+    columns = [[r for r in col if r is not None] for col in zip(*ratings, strict=False)] if ratings else []
     usable = [c for c in columns if len(c) >= 2]
     if not usable:
         return 0.0
@@ -162,7 +164,7 @@ class JudgeValidation:
         if self.disagreements:
             lines.append("")
             lines.append(f"  disagreements ({len(self.disagreements)}), first few:")
-            for task_id, judge, reference in self.disagreements[:6]:
+            for task_id, judge, _reference in self.disagreements[:6]:
                 direction = "judge passed, reference failed" if judge else "judge failed, reference passed"
                 lines.append(f"    {task_id}: {direction}")
         return "\n".join(lines)

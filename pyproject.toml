@@ -4,17 +4,68 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agenteval"
-version = "0.1.0"
-description = "Evaluation harness for agents and LLM systems with statistically honest scoring"
+version = "0.2.0"
+description = "Evaluation harness for LLM systems and agents, with statistics that refuse to overclaim"
+readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Abdus Sami"}]
+keywords = [
+    "llm", "evaluation", "benchmark", "agents", "testing",
+    "statistics", "regression-testing", "ai", "eval",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
 dependencies = []
 
 [project.optional-dependencies]
 yaml = ["pyyaml>=6.0"]
+schema = ["jsonschema>=4.20"]
+all = ["pyyaml>=6.0", "jsonschema>=4.20"]
+
+[project.urls]
+Homepage = "https://github.com/Abdus-Sami01/agenteval"
+Repository = "https://github.com/Abdus-Sami01/agenteval"
+Issues = "https://github.com/Abdus-Sami01/agenteval/issues"
+Changelog = "https://github.com/Abdus-Sami01/agenteval/blob/main/CHANGELOG.md"
 
 [project.scripts]
 agenteval = "agenteval.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["agenteval*"]
+
+[tool.setuptools.package-data]
+agenteval = ["py.typed"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008", "SIM108"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.ruff.lint.per-file-ignores]
+"agenteval/__init__.py" = ["F401"]
+"agenteval/graders/__init__.py" = ["F401"]
+"scripts/verify.py" = ["F403", "F405", "E402"]

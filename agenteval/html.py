@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-from typing import Any
 
 from agenteval.calibration import CalibrationReport
 from agenteval.stability import StabilityReport

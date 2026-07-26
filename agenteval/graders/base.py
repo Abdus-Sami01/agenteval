@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agenteval.exceptions import UnknownGraderError
 from agenteval.types import Score, Task
 
 
@@ -36,7 +37,7 @@ class GraderRegistry:
     def create(cls, key: str, **kwargs) -> Grader:
         grader_cls = cls._registry.get(key)
         if grader_cls is None:
-            raise ValueError(f"unknown grader {key!r}. Available: {sorted(cls._registry)}")
+            raise UnknownGraderError(key, set(cls._registry))
         return grader_cls(**kwargs)
 
     @classmethod

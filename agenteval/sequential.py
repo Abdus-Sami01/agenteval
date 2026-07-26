@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from agenteval.graders.base import Grader
-from agenteval.stats import _z_for, wilson_interval
+from agenteval.stats import wilson_interval
 from agenteval.types import EvalRun, Outcome, Task, TaskSuite
 
 

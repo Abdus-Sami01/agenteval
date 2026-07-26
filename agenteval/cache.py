@@ -5,8 +5,10 @@ import json
 import os
 import tempfile
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
+from agenteval.exceptions import ConfigurationError
 from agenteval.types import Task
 
 
@@ -59,7 +61,7 @@ class PredictionCache:
     def save(self, path: str = "") -> None:
         target = path or self.path
         if not target:
-            raise ValueError("no cache path configured")
+            raise ConfigurationError("no cache path configured; pass path= to PredictionCache or save(path=...)")
 
         directory = os.path.dirname(os.path.abspath(target)) or "."
         os.makedirs(directory, exist_ok=True)

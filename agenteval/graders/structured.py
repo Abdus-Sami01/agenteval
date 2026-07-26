@@ -8,7 +8,7 @@ from agenteval.types import Score, Task
 
 
 def coerce_json(value: Any) -> Any:
-    if isinstance(value, (dict, list)):
+    if isinstance(value, dict | list):
         return value
     text = str(value).strip()
     try:
@@ -54,7 +54,7 @@ class SetGrader(Grader):
             return self._score(0.0, passed=False, detail="could not parse a collection")
 
         if self._order:
-            matches = sum(1 for a, b in zip(pred_items, gold_items) if a == b)
+            matches = sum(1 for a, b in zip(pred_items, gold_items, strict=False) if a == b)
             score = matches / max(len(gold_items), 1)
             return self._score(score, passed=score >= self._threshold,
                                detail=f"{matches}/{len(gold_items)} positions match")
@@ -75,12 +75,12 @@ class SetGrader(Grader):
                            precision=precision, recall=recall)
 
     def _as_items(self, value: Any) -> list[Any] | None:
-        parsed = value if isinstance(value, (list, tuple, set)) else coerce_json(value)
+        parsed = value if isinstance(value, list | tuple | set) else coerce_json(value)
         if parsed is None:
             parsed = [p.strip() for p in str(value).split(",") if p.strip()]
         if isinstance(parsed, dict):
             parsed = list(parsed.keys())
-        if not isinstance(parsed, (list, tuple, set)):
+        if not isinstance(parsed, list | tuple | set):
             return None
         items = list(parsed)
         if self._normalize:

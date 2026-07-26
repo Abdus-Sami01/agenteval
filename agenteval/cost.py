@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
-from agenteval.types import EvalRun, Outcome, Task
+from agenteval.exceptions import BudgetExceededError
+from agenteval.types import EvalRun, Task
 
 
 @dataclass(frozen=True)
@@ -70,8 +72,7 @@ class CostReport:
         return "\n".join(lines)
 
 
-class BudgetExceeded(Exception):
-    pass
+BudgetExceeded = BudgetExceededError
 
 
 class CostTracker:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
+
+from agenteval.exceptions import PairedLengthError
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ def calibration(
     n_bins: int = 10,
 ) -> CalibrationReport:
     if len(confidences) != len(correct):
-        raise ValueError(f"length mismatch: {len(confidences)} confidences, {len(correct)} outcomes")
+        raise PairedLengthError(len(confidences), len(correct), "calibration")
 
     n = len(confidences)
     if n == 0:
@@ -93,9 +95,9 @@ def calibration(
     for i in range(n_bins):
         low, high = edges[i], edges[i + 1]
         if i == n_bins - 1:
-            members = [(c, o) for c, o in zip(clipped, outcomes) if low <= c <= high]
+            members = [(c, o) for c, o in zip(clipped, outcomes, strict=False) if low <= c <= high]
         else:
-            members = [(c, o) for c, o in zip(clipped, outcomes) if low <= c < high]
+            members = [(c, o) for c, o in zip(clipped, outcomes, strict=False) if low <= c < high]
 
         if not members:
             bins.append(Bin(low, high, 0, 0.0, 0.0))
@@ -110,7 +112,7 @@ def calibration(
         mce = max(mce, gap)
         bins.append(Bin(low, high, count, mean_conf, accuracy))
 
-    brier = sum((c - (1.0 if o else 0.0)) ** 2 for c, o in zip(clipped, outcomes)) / n
+    brier = sum((c - (1.0 if o else 0.0)) ** 2 for c, o in zip(clipped, outcomes, strict=False)) / n
 
     return CalibrationReport(
         ece=ece,
@@ -128,7 +130,7 @@ def brier_score(confidences: Sequence[float], correct: Sequence[bool]) -> float:
         return 0.0
     return sum(
         (min(1.0, max(0.0, c)) - (1.0 if o else 0.0)) ** 2
-        for c, o in zip(confidences, correct)
+        for c, o in zip(confidences, correct, strict=False)
     ) / len(confidences)
 
 
@@ -146,7 +148,7 @@ def log_loss(confidences: Sequence[float], correct: Sequence[bool], epsilon: flo
     if not confidences:
         return 0.0
     total = 0.0
-    for c, o in zip(confidences, correct):
+    for c, o in zip(confidences, correct, strict=False):
         p = min(1 - epsilon, max(epsilon, float(c)))
         total += -math.log(p) if o else -math.log(1 - p)
     return total / len(confidences)

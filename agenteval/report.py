@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agenteval.stats import bootstrap_interval, wilson_interval
+from agenteval.stats import wilson_interval
 from agenteval.types import EvalRun, Outcome, TaskResult
 
 
@@ -170,7 +170,7 @@ def leaderboard_tiers(runs: dict[str, EvalRun], level: float = 0.95) -> str:
     if len(tiers) == 1:
         lines.append("  All systems are within noise of each other on this suite.")
     else:
-        lines.append(f"  Tier 1 is separated from Tier 2 by non-overlapping intervals.")
+        lines.append("  Tier 1 is separated from Tier 2 by non-overlapping intervals.")
     return "\n".join(lines)
 
 

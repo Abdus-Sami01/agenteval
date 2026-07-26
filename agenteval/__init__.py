@@ -1,3 +1,25 @@
+"""agenteval - evaluation harness for LLM systems and agents.
+
+Scores systems against task suites and reports results with statistics that
+refuse to overclaim: confidence intervals everywhere, INCONCLUSIVE verdicts
+when evidence is thin, and corrections for multiple comparisons.
+
+    from agenteval import ExactMatchGrader, evaluate, suite_from_records
+
+    suite = suite_from_records("math", [
+        {"id": "q1", "input": "2+2", "expected": "4"},
+    ])
+    run = evaluate(my_system, suite, ExactMatchGrader())
+    print(run.pass_rate)
+
+See https://github.com/Abdus-Sami01/agenteval for the full guide.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from agenteval._version import __version__, __version_info__
 from agenteval.agreement import (
     AgreementReport,
     JudgeValidation,
@@ -33,27 +55,16 @@ from agenteval.cost import (
     estimate_tokens,
     token_cost,
 )
-from agenteval.stability import (
-    StabilityReport,
-    TaskStability,
-    analyze_stability,
-    intraclass_correlation,
-    required_repeats,
-)
-from agenteval.multiple import (
-    MultipleComparisonReport,
-    SystemMatrix,
-    adjust,
-    benjamini_hochberg,
-    bonferroni,
-    compare_all,
-    holm_bonferroni,
-)
-from agenteval.sequential import (
-    SequentialGate,
-    SequentialRun,
-    StoppingDecision,
-    evaluate_sequential,
+from agenteval.exceptions import (
+    AgentEvalError,
+    BudgetExceededError,
+    ConfigurationError,
+    GraderError,
+    PairedLengthError,
+    StatisticsError,
+    SuiteError,
+    SuiteFormatError,
+    UnknownGraderError,
 )
 from agenteval.graders import (
     CallableGrader,
@@ -76,24 +87,46 @@ from agenteval.graders import (
     normalize_text,
 )
 from agenteval.html import leaderboard_to_html, run_to_html, write_html
-from agenteval.resume import ResultStore, evaluate_resumable
+from agenteval.multiple import (
+    MultipleComparisonReport,
+    SystemMatrix,
+    adjust,
+    benjamini_hochberg,
+    bonferroni,
+    compare_all,
+    holm_bonferroni,
+)
+from agenteval.progress import ProgressReporter, configure_logging
 from agenteval.report import (
     failure_digest,
     leaderboard,
     leaderboard_tiers,
-    tag_breakdown,
     run_to_dict,
     run_to_json,
     run_to_markdown,
     run_to_text,
+    tag_breakdown,
 )
-from agenteval.runner import detect_git_sha, evaluate, evaluate_many, repeat_evaluate
+from agenteval.resume import ResultStore, evaluate_resumable
+from agenteval.runner import detect_git_sha, evaluate, evaluate_many, iter_evaluate, repeat_evaluate
+from agenteval.sequential import (
+    SequentialGate,
+    SequentialRun,
+    StoppingDecision,
+    evaluate_sequential,
+)
+from agenteval.stability import (
+    StabilityReport,
+    TaskStability,
+    analyze_stability,
+    intraclass_correlation,
+    required_repeats,
+)
 from agenteval.stats import (
     Interval,
     TestResult,
     bca_interval,
     bootstrap_interval,
-    stratified_rates,
     cliffs_delta,
     cohens_d,
     interpret_effect,
@@ -104,6 +137,7 @@ from agenteval.stats import (
     permutation_test,
     required_sample_size,
     stdev,
+    stratified_rates,
     wilson_interval,
 )
 from agenteval.suites import (
@@ -128,12 +162,34 @@ from agenteval.types import (
     TaskSuite,
 )
 
+logging.getLogger("agenteval").addHandler(logging.NullHandler())
+
 __all__ = [
     "adjust",
+    "AgentEvalError",
     "AgreementReport",
     "analyze_stability",
+    "bca_interval",
+    "benjamini_hochberg",
+    "bonferroni",
+    "bootstrap_interval",
+    "brier_score",
+    "brier_skill_score",
     "BudgetExceeded",
+    "BudgetExceededError",
+    "calibration",
+    "CalibrationReport",
+    "CallableGrader",
     "clean_suite",
+    "cliffs_delta",
+    "cohens_d",
+    "cohens_kappa",
+    "compare",
+    "compare_all",
+    "Comparison",
+    "ConfigurationError",
+    "configure_logging",
+    "ContainsGrader",
     "ContaminationHit",
     "ContaminationReport",
     "CorpusIndex",
@@ -141,107 +197,101 @@ __all__ = [
     "CostReport",
     "CostTracker",
     "detect_contamination",
-    "estimate_tokens",
-    "evaluate_resumable",
-    "leaderboard_tiers",
-    "leaderboard_to_html",
-    "ResultStore",
-    "run_to_html",
-    "tag_breakdown",
-    "write_html",
-    "find_duplicates",
-    "intraclass_correlation",
-    "ngram_hashes",
-    "required_repeats",
-    "StabilityReport",
-    "TaskStability",
-    "token_cost",
-    "bca_interval",
-    "benjamini_hochberg",
-    "bonferroni",
-    "bootstrap_interval",
-    "brier_score",
-    "brier_skill_score",
-    "calibration",
-    "CalibrationReport",
-    "cohens_kappa",
-    "compare_all",
-    "evaluate_sequential",
-    "holm_bonferroni",
-    "JudgeValidation",
-    "krippendorff_alpha",
-    "log_loss",
-    "MultipleComparisonReport",
-    "percent_agreement",
-    "prediction_key",
-    "PredictionCache",
-    "reliability_diagram_text",
-    "SequentialGate",
-    "SequentialRun",
-    "StoppingDecision",
-    "stratified_rates",
-    "SystemMatrix",
-    "validate_judge",
-    "CallableGrader",
-    "cliffs_delta",
-    "cohens_d",
-    "compare",
-    "Comparison",
-    "ContainsGrader",
     "detect_git_sha",
     "EditDistanceGrader",
+    "estimate_tokens",
+    "EvalRun",
     "evaluate",
     "evaluate_many",
-    "EvalRun",
+    "evaluate_resumable",
+    "evaluate_sequential",
     "ExactMatchGrader",
     "F1TokenGrader",
     "failure_digest",
+    "find_duplicates",
     "gate",
     "GateReport",
     "GateResult",
     "Grader",
+    "GraderError",
     "GraderRegistry",
+    "holm_bonferroni",
     "interpret_effect",
     "Interval",
+    "intraclass_correlation",
+    "iter_evaluate",
     "JSONSchemaGrader",
+    "JudgeValidation",
+    "krippendorff_alpha",
     "leaderboard",
+    "leaderboard_tiers",
+    "leaderboard_to_html",
     "LLMJudgeGrader",
     "load_csv",
     "load_json",
     "load_jsonl",
     "load_suite",
     "load_yaml",
+    "log_loss",
     "mcnemar_test",
     "mean",
     "minimum_detectable_effect",
+    "MultipleComparisonReport",
+    "ngram_hashes",
     "normalize_text",
     "NumericGrader",
     "Outcome",
     "paired_bootstrap_diff",
+    "PairedLengthError",
+    "percent_agreement",
     "permutation_test",
     "PredicateGrader",
+    "prediction_key",
+    "PredictionCache",
+    "ProgressReporter",
     "RangeGrader",
     "RegexGrader",
     "regression_gate",
+    "reliability_diagram_text",
     "repeat_evaluate",
+    "required_repeats",
     "required_sample_size",
+    "ResultStore",
     "RubricGrader",
     "run_to_dict",
+    "run_to_html",
     "run_to_json",
     "run_to_markdown",
     "run_to_text",
     "RunMetadata",
     "save_suite",
     "Score",
+    "SequentialGate",
+    "SequentialRun",
     "SetGrader",
+    "StabilityReport",
+    "StatisticsError",
     "stdev",
+    "StoppingDecision",
+    "stratified_rates",
     "StructuralGrader",
     "suite_from_records",
+    "SuiteError",
+    "SuiteFormatError",
+    "SystemMatrix",
+    "tag_breakdown",
     "Task",
     "TaskResult",
+    "TaskStability",
     "TaskSuite",
     "TestResult",
+    "token_cost",
+    "UnknownGraderError",
+    "validate_judge",
     "validate_suite",
+    "__version__",
+    "__version_info__",
     "WeightedGrader",
     "wilson_interval",
+    "write_html",
 ]

@@ -12,7 +12,7 @@ NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 def extract_number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return float(value)
     match = NUMBER_RE.search(str(value).replace(",", ""))
     if not match:
@@ -66,7 +66,7 @@ class RangeGrader(Grader):
             return self._score(0.0, passed=False, detail="no number found")
 
         low, high = self._low, self._high
-        if low is None and high is None and isinstance(task.expected, (list, tuple)) and len(task.expected) == 2:
+        if low is None and high is None and isinstance(task.expected, list | tuple) and len(task.expected) == 2:
             low, high = float(task.expected[0]), float(task.expected[1])
 
         if self._inclusive:

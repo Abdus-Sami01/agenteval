@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
-from agenteval.stats import Interval, mean, stdev, wilson_interval, _z_for
+from agenteval.stats import Interval, _z_for, mean, stdev, wilson_interval
 from agenteval.types import EvalRun, Outcome
 
 

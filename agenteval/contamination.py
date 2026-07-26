@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
 
-from agenteval.types import Task, TaskSuite
+from agenteval.types import TaskSuite
 
 WORD_RE = re.compile(r"\w+")
 

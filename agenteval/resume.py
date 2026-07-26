@@ -5,7 +5,8 @@ import os
 import tempfile
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from agenteval.graders.base import Grader
 from agenteval.types import (

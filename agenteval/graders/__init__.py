@@ -1,4 +1,8 @@
 from agenteval.graders.base import Grader, GraderRegistry
+from agenteval.graders.numeric import NumericGrader, RangeGrader
+from agenteval.graders.programmatic import CallableGrader, PredicateGrader
+from agenteval.graders.rubric import LLMJudgeGrader, RubricGrader, WeightedGrader
+from agenteval.graders.structured import JSONSchemaGrader, SetGrader, StructuralGrader
 from agenteval.graders.text import (
     ContainsGrader,
     EditDistanceGrader,
@@ -7,10 +11,6 @@ from agenteval.graders.text import (
     RegexGrader,
     normalize_text,
 )
-from agenteval.graders.numeric import NumericGrader, RangeGrader
-from agenteval.graders.structured import JSONSchemaGrader, SetGrader, StructuralGrader
-from agenteval.graders.programmatic import CallableGrader, PredicateGrader
-from agenteval.graders.rubric import LLMJudgeGrader, RubricGrader, WeightedGrader
 
 GraderRegistry.register("exact", ExactMatchGrader)
 GraderRegistry.register("contains", ContainsGrader)

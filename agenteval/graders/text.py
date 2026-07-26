@@ -60,7 +60,7 @@ class ContainsGrader(Grader):
 
     def grade(self, prediction: Any, task: Task) -> Score:
         expected = task.expected
-        needles = expected if isinstance(expected, (list, tuple, set)) else [expected]
+        needles = expected if isinstance(expected, list | tuple | set) else [expected]
 
         hay = normalize_text(prediction) if self._normalize else str(prediction)
         found = [n for n in needles if (normalize_text(n) if self._normalize else str(n)) in hay]

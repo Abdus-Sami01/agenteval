@@ -4,6 +4,11 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+.ruff_cache/
 *.egg
 .env
+.venv/
+venv/
 runs/
+*.html
+!examples/*.html

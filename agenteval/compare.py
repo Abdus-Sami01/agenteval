@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from agenteval.stats import (
     Interval,
     TestResult,
-    bootstrap_interval,
     cliffs_delta,
     interpret_effect,
     mcnemar_test,

@@ -5,7 +5,7 @@ import json
 import sys
 
 from agenteval.graders.base import GraderRegistry
-from agenteval.report import leaderboard, run_to_markdown, run_to_text
+from agenteval.report import run_to_markdown, run_to_text
 from agenteval.stats import (
     minimum_detectable_effect,
     required_sample_size,
@@ -114,10 +114,9 @@ def load_object(spec: str):
 
 
 def cmd_run(args) -> int:
-    import json as _json
     import sys as _sys
 
-    from agenteval.report import run_to_json, run_to_markdown, run_to_text, tag_breakdown
+    from agenteval.report import run_to_json, tag_breakdown
     from agenteval.runner import evaluate
 
     if args.path:
@@ -180,7 +179,6 @@ def cmd_run(args) -> int:
 def cmd_compare(args) -> int:
     import json as _json
 
-    from agenteval.compare import Comparison, regression_gate
     from agenteval.stats import paired_bootstrap_diff, permutation_test, wilson_interval
 
     with open(args.baseline, encoding="utf-8") as f:
@@ -228,9 +226,8 @@ def cmd_compare(args) -> int:
     if verdict == "INCONCLUSIVE":
         print("  (confidence interval spans zero - not enough evidence either way)")
 
-    if args.fail_on_regression:
-        if verdict == "REGRESSION" or len(broken) > args.max_broken:
-            return 1
+    if args.fail_on_regression and (verdict == "REGRESSION" or len(broken) > args.max_broken):
+        return 1
     return 0
 
 

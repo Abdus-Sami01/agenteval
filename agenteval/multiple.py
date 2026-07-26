@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from agenteval.compare import Comparison, compare
+from agenteval.exceptions import ConfigurationError
 from agenteval.types import EvalRun
 
 
@@ -119,7 +120,7 @@ def adjust(p_values: Sequence[float], method: str = "holm", alpha: float = 0.05,
            labels: Sequence[str] | None = None) -> MultipleComparisonReport:
     fn = CORRECTIONS.get(method.lower())
     if fn is None:
-        raise ValueError(f"unknown correction {method!r}. Available: {sorted(CORRECTIONS)}")
+        raise ConfigurationError(f"unknown correction {method!r}. Available: {', '.join(sorted(CORRECTIONS))}")
     return fn(p_values, alpha, labels)
 
 
@@ -170,7 +171,7 @@ def compare_all(
 
     if baseline:
         if baseline not in runs:
-            raise ValueError(f"baseline {baseline!r} not among runs: {names}")
+            raise ConfigurationError(f"baseline {baseline!r} not among runs: {names}")
         pairs = [(baseline, n) for n in names if n != baseline]
     else:
         pairs = [(names[i], names[j]) for i in range(len(names)) for j in range(i + 1, len(names))]

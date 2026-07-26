@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
+
+from agenteval.exceptions import PairedLengthError
 
 
 @dataclass(frozen=True)
@@ -118,11 +120,11 @@ def paired_bootstrap_diff(
     seed: int = 0,
 ) -> Interval:
     if len(baseline) != len(candidate):
-        raise ValueError(f"paired comparison needs equal lengths, got {len(baseline)} and {len(candidate)}")
+        raise PairedLengthError(len(baseline), len(candidate), "paired bootstrap")
     if not baseline:
         return Interval(0.0, 0.0, 0.0, level, "paired-bootstrap")
 
-    diffs = [c - b for b, c in zip(baseline, candidate)]
+    diffs = [c - b for b, c in zip(baseline, candidate, strict=False)]
     means = _bootstrap_means(diffs, iterations, seed)
 
     alpha = (1 - level) / 2
@@ -207,11 +209,11 @@ def permutation_test(
     alpha: float = 0.05,
 ) -> TestResult:
     if len(baseline) != len(candidate):
-        raise ValueError("permutation test requires paired samples of equal length")
+        raise PairedLengthError(len(baseline), len(candidate), "permutation test")
     if not baseline:
         return TestResult(0.0, 1.0, "paired-permutation", False, "no samples")
 
-    diffs = [c - b for b, c in zip(baseline, candidate)]
+    diffs = [c - b for b, c in zip(baseline, candidate, strict=False)]
     observed = mean(diffs)
     rng = random.Random(seed)
 
@@ -233,10 +235,10 @@ def permutation_test(
 
 def mcnemar_test(baseline: Sequence[bool], candidate: Sequence[bool], alpha: float = 0.05) -> TestResult:
     if len(baseline) != len(candidate):
-        raise ValueError("mcnemar test requires paired samples of equal length")
+        raise PairedLengthError(len(baseline), len(candidate), "mcnemar test")
 
-    only_candidate = sum(1 for b, c in zip(baseline, candidate) if c and not b)
-    only_baseline = sum(1 for b, c in zip(baseline, candidate) if b and not c)
+    only_candidate = sum(1 for b, c in zip(baseline, candidate, strict=False) if c and not b)
+    only_baseline = sum(1 for b, c in zip(baseline, candidate, strict=False) if b and not c)
     discordant = only_candidate + only_baseline
 
     if discordant == 0:

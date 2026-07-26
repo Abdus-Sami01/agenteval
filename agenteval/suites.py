@@ -4,6 +4,7 @@ import csv
 import json
 from typing import Any
 
+from agenteval.exceptions import SuiteError, SuiteFormatError
 from agenteval.types import Task, TaskSuite
 
 
@@ -18,9 +19,9 @@ def suite_from_records(
     tasks = []
     for i, record in enumerate(records):
         if not isinstance(record, dict):
-            raise ValueError(f"record {i} is not a mapping")
+            raise SuiteError(f"record {i} is not a mapping, got {type(record).__name__}")
         if input_key not in record:
-            raise ValueError(f"record {i} missing required key {input_key!r}")
+            raise SuiteError(f"record {i} missing required key {input_key!r}")
 
         known = {input_key, expected_key, id_key, "tags", "weight"}
         tasks.append(Task(
@@ -44,7 +45,7 @@ def load_jsonl(path: str, name: str = "", **kwargs) -> TaskSuite:
             try:
                 records.append(json.loads(line))
             except json.JSONDecodeError as e:
-                raise ValueError(f"{path}:{line_no} is not valid JSON: {e}")
+                raise SuiteFormatError(path, f"invalid JSON: {e}", line_no) from e
     return suite_from_records(name or _stem(path), records, **kwargs)
 
 
@@ -76,8 +77,10 @@ def load_csv(path: str, name: str = "", **kwargs) -> TaskSuite:
 def load_yaml(path: str, name: str = "", **kwargs) -> TaskSuite:
     try:
         import yaml
-    except ImportError:
-        raise ImportError("pyyaml is required for YAML suites: pip install pyyaml")
+    except ImportError as e:
+        raise SuiteError(
+            "pyyaml is required for YAML suites. Install it with: pip install agenteval[yaml]"
+        ) from e
     with open(path, encoding="utf-8") as f:
         payload = yaml.safe_load(f)
 
@@ -103,7 +106,7 @@ def load_suite(path: str, **kwargs) -> TaskSuite:
         return load_csv(path, **kwargs)
     if lowered.endswith((".yaml", ".yml")):
         return load_yaml(path, **kwargs)
-    raise ValueError(f"unsupported suite format: {path}")
+    raise SuiteFormatError(path, "unsupported format; expected .jsonl, .json, .csv, .yaml, or .yml")
 
 
 def save_suite(suite: TaskSuite, path: str) -> None:
