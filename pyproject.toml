@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agenteval"
+version = "0.1.0"
+description = "Evaluation harness for agents and LLM systems with statistically honest scoring"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6.0"]
+
+[project.scripts]
+agenteval = "agenteval.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agenteval*"]
