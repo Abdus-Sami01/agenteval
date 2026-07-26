@@ -16,6 +16,30 @@ from agenteval.calibration import (
     reliability_diagram_text,
 )
 from agenteval.compare import Comparison, compare, gate, regression_gate
+from agenteval.contamination import (
+    ContaminationHit,
+    ContaminationReport,
+    CorpusIndex,
+    clean_suite,
+    detect_contamination,
+    find_duplicates,
+    ngram_hashes,
+)
+from agenteval.cost import (
+    BudgetExceeded,
+    CostReport,
+    CostTracker,
+    cost_efficiency,
+    estimate_tokens,
+    token_cost,
+)
+from agenteval.stability import (
+    StabilityReport,
+    TaskStability,
+    analyze_stability,
+    intraclass_correlation,
+    required_repeats,
+)
 from agenteval.multiple import (
     MultipleComparisonReport,
     SystemMatrix,
@@ -103,6 +127,24 @@ from agenteval.types import (
 __all__ = [
     "adjust",
     "AgreementReport",
+    "analyze_stability",
+    "BudgetExceeded",
+    "clean_suite",
+    "ContaminationHit",
+    "ContaminationReport",
+    "CorpusIndex",
+    "cost_efficiency",
+    "CostReport",
+    "CostTracker",
+    "detect_contamination",
+    "estimate_tokens",
+    "find_duplicates",
+    "intraclass_correlation",
+    "ngram_hashes",
+    "required_repeats",
+    "StabilityReport",
+    "TaskStability",
+    "token_cost",
     "bca_interval",
     "benjamini_hochberg",
     "bonferroni",

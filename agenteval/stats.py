@@ -85,19 +85,29 @@ def bootstrap_interval(
         v = float(values[0])
         return Interval(v, v, v, level, "bootstrap")
 
-    rng = random.Random(seed)
-    n = len(values)
-    means = []
-    for _ in range(iterations):
-        sample = [values[rng.randrange(n)] for _ in range(n)]
-        means.append(sum(sample) / n)
-    means.sort()
+    means = _bootstrap_means(values, iterations, seed)
 
     alpha = (1 - level) / 2
     low = means[max(0, int(alpha * iterations))]
     high = means[min(iterations - 1, int((1 - alpha) * iterations))]
 
     return Interval(point=mean(values), low=low, high=high, level=level, method="bootstrap")
+
+
+def _bootstrap_means(values: Sequence[float], iterations: int, seed: int) -> list[float]:
+    """Sorted bootstrap means.
+
+    Resamples with random.choices, whose inner loop runs in C, rather than
+    drawing indices one at a time in Python.
+    """
+    rng = random.Random(seed)
+    n = len(values)
+    choices = rng.choices
+    pool = list(values)
+
+    means = [sum(choices(pool, k=n)) / n for _ in range(iterations)]
+    means.sort()
+    return means
 
 
 def paired_bootstrap_diff(
@@ -113,13 +123,7 @@ def paired_bootstrap_diff(
         return Interval(0.0, 0.0, 0.0, level, "paired-bootstrap")
 
     diffs = [c - b for b, c in zip(baseline, candidate)]
-    rng = random.Random(seed)
-    n = len(diffs)
-    means = []
-    for _ in range(iterations):
-        sample = [diffs[rng.randrange(n)] for _ in range(n)]
-        means.append(sum(sample) / n)
-    means.sort()
+    means = _bootstrap_means(diffs, iterations, seed)
 
     alpha = (1 - level) / 2
     return Interval(
@@ -144,13 +148,7 @@ def bca_interval(
         return bootstrap_interval(values, level, iterations, seed)
 
     observed = mean(values)
-    rng = random.Random(seed)
-
-    replicates = []
-    for _ in range(iterations):
-        sample = [values[rng.randrange(n)] for _ in range(n)]
-        replicates.append(sum(sample) / n)
-    replicates.sort()
+    replicates = _bootstrap_means(values, iterations, seed)
 
     below = sum(1 for r in replicates if r < observed)
     if below == 0 or below == iterations:
