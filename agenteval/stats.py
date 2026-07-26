@@ -131,6 +131,76 @@ def paired_bootstrap_diff(
     )
 
 
+def bca_interval(
+    values: Sequence[float],
+    level: float = 0.95,
+    iterations: int = 10_000,
+    seed: int = 0,
+) -> Interval:
+    n = len(values)
+    if n == 0:
+        return Interval(0.0, 0.0, 0.0, level, "bca")
+    if n < 3:
+        return bootstrap_interval(values, level, iterations, seed)
+
+    observed = mean(values)
+    rng = random.Random(seed)
+
+    replicates = []
+    for _ in range(iterations):
+        sample = [values[rng.randrange(n)] for _ in range(n)]
+        replicates.append(sum(sample) / n)
+    replicates.sort()
+
+    below = sum(1 for r in replicates if r < observed)
+    if below == 0 or below == iterations:
+        return bootstrap_interval(values, level, iterations, seed)
+    z0 = _inv_norm_cdf(below / iterations)
+
+    total = sum(values)
+    jackknife = [(total - v) / (n - 1) for v in values]
+    jack_mean = mean(jackknife)
+    deviations = [jack_mean - j for j in jackknife]
+
+    numerator = sum(d ** 3 for d in deviations)
+    denominator = 6 * (sum(d ** 2 for d in deviations) ** 1.5)
+    acceleration = numerator / denominator if denominator else 0.0
+
+    alpha = (1 - level) / 2
+    z_lo, z_hi = _inv_norm_cdf(alpha), _inv_norm_cdf(1 - alpha)
+
+    def adjust(z: float) -> float:
+        denom = 1 - acceleration * (z0 + z)
+        if denom == 0:
+            return 0.5
+        return _norm_cdf(z0 + (z0 + z) / denom)
+
+    lo_pct, hi_pct = adjust(z_lo), adjust(z_hi)
+    lo_idx = min(iterations - 1, max(0, int(lo_pct * iterations)))
+    hi_idx = min(iterations - 1, max(0, int(hi_pct * iterations)))
+    if lo_idx > hi_idx:
+        lo_idx, hi_idx = hi_idx, lo_idx
+
+    return Interval(
+        point=observed,
+        low=replicates[lo_idx],
+        high=replicates[hi_idx],
+        level=level,
+        method="bca",
+    )
+
+
+def stratified_rates(
+    groups: dict[str, tuple[int, int]],
+    level: float = 0.95,
+) -> dict[str, Interval]:
+    return {name: wilson_interval(passed, total, level) for name, (passed, total) in groups.items()}
+
+
+def _norm_cdf(z: float) -> float:
+    return 0.5 * (1 + math.erf(z / math.sqrt(2)))
+
+
 def permutation_test(
     baseline: Sequence[float],
     candidate: Sequence[float],

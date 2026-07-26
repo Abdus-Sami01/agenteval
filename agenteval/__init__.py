@@ -1,4 +1,36 @@
+from agenteval.agreement import (
+    AgreementReport,
+    JudgeValidation,
+    cohens_kappa,
+    krippendorff_alpha,
+    percent_agreement,
+    validate_judge,
+)
+from agenteval.cache import PredictionCache, prediction_key
+from agenteval.calibration import (
+    CalibrationReport,
+    brier_score,
+    brier_skill_score,
+    calibration,
+    log_loss,
+    reliability_diagram_text,
+)
 from agenteval.compare import Comparison, compare, gate, regression_gate
+from agenteval.multiple import (
+    MultipleComparisonReport,
+    SystemMatrix,
+    adjust,
+    benjamini_hochberg,
+    bonferroni,
+    compare_all,
+    holm_bonferroni,
+)
+from agenteval.sequential import (
+    SequentialGate,
+    SequentialRun,
+    StoppingDecision,
+    evaluate_sequential,
+)
 from agenteval.graders import (
     CallableGrader,
     ContainsGrader,
@@ -31,7 +63,9 @@ from agenteval.runner import detect_git_sha, evaluate, evaluate_many, repeat_eva
 from agenteval.stats import (
     Interval,
     TestResult,
+    bca_interval,
     bootstrap_interval,
+    stratified_rates,
     cliffs_delta,
     cohens_d,
     interpret_effect,
@@ -67,7 +101,34 @@ from agenteval.types import (
 )
 
 __all__ = [
+    "adjust",
+    "AgreementReport",
+    "bca_interval",
+    "benjamini_hochberg",
+    "bonferroni",
     "bootstrap_interval",
+    "brier_score",
+    "brier_skill_score",
+    "calibration",
+    "CalibrationReport",
+    "cohens_kappa",
+    "compare_all",
+    "evaluate_sequential",
+    "holm_bonferroni",
+    "JudgeValidation",
+    "krippendorff_alpha",
+    "log_loss",
+    "MultipleComparisonReport",
+    "percent_agreement",
+    "prediction_key",
+    "PredictionCache",
+    "reliability_diagram_text",
+    "SequentialGate",
+    "SequentialRun",
+    "StoppingDecision",
+    "stratified_rates",
+    "SystemMatrix",
+    "validate_judge",
     "CallableGrader",
     "cliffs_delta",
     "cohens_d",
