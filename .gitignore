@@ -12,3 +12,6 @@ venv/
 runs/
 *.html
 !examples/*.html
+.coverage
+coverage.xml
+htmlcov/

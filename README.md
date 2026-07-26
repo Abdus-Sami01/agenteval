@@ -264,6 +264,23 @@ file still gives you clean JSON and CI logs stay readable.
 
 ---
 
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest                          # 451 tests
+pytest --cov=agenteval          # with coverage (currently 90%)
+ruff check agenteval tests
+python scripts/verify.py        # post-install self check
+```
+
+The statistics tests check every routine against hand-computed closed forms
+rather than against the implementation's own output, so a silent change in
+the maths fails the build. CI runs the suite on Linux, macOS, and Windows
+across Python 3.10 through 3.13.
+
+---
+
 ## License
 
 MIT

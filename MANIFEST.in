@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+include pyproject.toml
+include agenteval/py.typed
+recursive-include tests *.py
+recursive-include examples *.py
+recursive-include scripts *.py
+recursive-include .github *.yml
+prune dist
+prune build
+global-exclude __pycache__ *.py[cod]

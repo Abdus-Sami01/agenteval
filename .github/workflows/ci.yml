@@ -26,9 +26,12 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[all]"
+          pip install -e ".[dev]"
 
-      - name: Import and public API integrity
+      - name: Tests
+        run: pytest --cov=agenteval --cov-report=term --cov-report=xml
+
+      - name: Install-time self check
         run: python scripts/verify.py
 
       - name: CLI smoke
@@ -38,6 +41,13 @@ jobs:
 
       - name: Examples
         run: python examples/extraction_eval.py
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
 
   build:
     name: Build distribution
@@ -66,4 +76,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check agenteval
+      - run: ruff check agenteval tests scripts

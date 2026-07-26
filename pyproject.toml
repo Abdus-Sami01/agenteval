@@ -36,6 +36,7 @@ dependencies = []
 yaml = ["pyyaml>=6.0"]
 schema = ["jsonschema>=4.20"]
 all = ["pyyaml>=6.0", "jsonschema>=4.20"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.6", "pyyaml>=6.0", "jsonschema>=4.20"]
 
 [project.urls]
 Homepage = "https://github.com/Abdus-Sami01/agenteval"
@@ -69,3 +70,21 @@ ignore_missing_imports = true
 "agenteval/__init__.py" = ["F401"]
 "agenteval/graders/__init__.py" = ["F401"]
 "scripts/verify.py" = ["F403", "F405", "E402"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["agenteval"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

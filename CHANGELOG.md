@@ -8,6 +8,12 @@ This project follows [Semantic Versioning](https://semver.org/).
 Packaging and hardening pass. First release intended for public use.
 
 ### Added
+- pytest suite: 451 tests at 90% coverage, run on Linux, macOS, and Windows
+  across Python 3.10-3.13. Statistical routines are verified against
+  hand-computed closed forms rather than recorded output.
+- `MANIFEST.in` so the sdist carries tests, fixtures, examples, and the
+  changelog; `pip install .[dev] && pytest` works from an unpacked sdist.
+- `dev` extra with pytest, pytest-cov, and ruff.
 - Typed exception hierarchy rooted at `AgentEvalError` (`SuiteError`,
   `SuiteFormatError`, `GraderError`, `UnknownGraderError`, `StatisticsError`,
   `PairedLengthError`, `ConfigurationError`, `BudgetExceededError`).
