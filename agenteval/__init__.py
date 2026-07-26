@@ -75,9 +75,13 @@ from agenteval.graders import (
     WeightedGrader,
     normalize_text,
 )
+from agenteval.html import leaderboard_to_html, run_to_html, write_html
+from agenteval.resume import ResultStore, evaluate_resumable
 from agenteval.report import (
     failure_digest,
     leaderboard,
+    leaderboard_tiers,
+    tag_breakdown,
     run_to_dict,
     run_to_json,
     run_to_markdown,
@@ -138,6 +142,13 @@ __all__ = [
     "CostTracker",
     "detect_contamination",
     "estimate_tokens",
+    "evaluate_resumable",
+    "leaderboard_tiers",
+    "leaderboard_to_html",
+    "ResultStore",
+    "run_to_html",
+    "tag_breakdown",
+    "write_html",
     "find_duplicates",
     "intraclass_correlation",
     "ngram_hashes",

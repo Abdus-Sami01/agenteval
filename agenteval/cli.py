@@ -92,6 +92,148 @@ def cmd_report(args) -> int:
     return 0
 
 
+def load_object(spec: str):
+    """Import 'module:attribute' and return the attribute.
+
+    Importing runs the target module, so only ever point this at code you
+    control. The spec must be given explicitly - nothing is auto-discovered.
+    """
+    import importlib
+
+    if ":" not in spec:
+        raise ValueError(f"expected 'module:attribute', got {spec!r}")
+
+    module_name, _, attribute = spec.partition(":")
+    if not module_name or not attribute:
+        raise ValueError(f"expected 'module:attribute', got {spec!r}")
+
+    module = importlib.import_module(module_name)
+    if not hasattr(module, attribute):
+        raise AttributeError(f"{module_name!r} has no attribute {attribute!r}")
+    return getattr(module, attribute)
+
+
+def cmd_run(args) -> int:
+    import json as _json
+    import sys as _sys
+
+    from agenteval.report import run_to_json, run_to_markdown, run_to_text, tag_breakdown
+    from agenteval.runner import evaluate
+
+    if args.path:
+        _sys.path.insert(0, args.path)
+
+    suite = load_suite(args.suite)
+    problems = validate_suite(suite)
+    if problems:
+        print("suite is invalid:", file=_sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=_sys.stderr)
+        return 1
+
+    if args.tags:
+        suite = suite.filter(tags=set(args.tags.split(",")))
+    if args.limit:
+        suite = suite.sample(args.limit, seed=args.seed)
+
+    system = load_object(args.system)
+    grader = load_object(args.grader) if ":" in args.grader else GraderRegistry.create(args.grader)
+    if callable(grader) and not hasattr(grader, "grade"):
+        grader = grader()
+
+    run = evaluate(
+        system, suite, grader,
+        max_parallel=args.parallel, timeout_s=args.timeout, retries=args.retries,
+        seed=args.seed, system_name=args.name or args.system,
+    )
+
+    if args.format == "json":
+        print(run_to_json(run))
+    elif args.format == "markdown":
+        print(run_to_markdown(run))
+    else:
+        print(run_to_text(run))
+        if suite.all_tags:
+            print()
+            print(tag_breakdown(run))
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(run_to_json(run))
+        print(f"\nwrote {args.out}")
+
+    if args.html:
+        from agenteval.html import run_to_html, write_html
+        write_html(run_to_html(run), args.html)
+        print(f"wrote {args.html}")
+
+    if args.min_pass_rate is not None:
+        from agenteval.compare import gate
+        report = gate(run, min_pass_rate=args.min_pass_rate)
+        print()
+        print(report.summary())
+        return 0 if report.passed else 1
+
+    return 0
+
+
+def cmd_compare(args) -> int:
+    import json as _json
+
+    from agenteval.compare import Comparison, regression_gate
+    from agenteval.stats import paired_bootstrap_diff, permutation_test, wilson_interval
+
+    with open(args.baseline, encoding="utf-8") as f:
+        base = _json.load(f)
+    with open(args.candidate, encoding="utf-8") as f:
+        cand = _json.load(f)
+
+    base_scores = {r["task_id"]: r for r in base.get("results", [])}
+    cand_scores = {r["task_id"]: r for r in cand.get("results", [])}
+    shared = [t for t in base_scores if t in cand_scores]
+
+    if not shared:
+        print("no overlapping task ids between the two runs")
+        return 2
+
+    b = [float(base_scores[t].get("score", 0.0)) for t in shared]
+    c = [float(cand_scores[t].get("score", 0.0)) for t in shared]
+    b_pass = [base_scores[t]["outcome"] == "pass" for t in shared]
+    c_pass = [cand_scores[t]["outcome"] == "pass" for t in shared]
+
+    delta = paired_bootstrap_diff(b, c, iterations=args.iterations, seed=args.seed)
+    sig = permutation_test(b, c, iterations=args.iterations, seed=args.seed)
+    broken = [t for t in shared if base_scores[t]["outcome"] == "pass" and cand_scores[t]["outcome"] != "pass"]
+    fixed = [t for t in shared if base_scores[t]["outcome"] != "pass" and cand_scores[t]["outcome"] == "pass"]
+
+    print(f"{base.get('metadata',{}).get('system','baseline')} -> "
+          f"{cand.get('metadata',{}).get('system','candidate')}  ({len(shared)} paired tasks)")
+    print()
+    print(f"  baseline  {wilson_interval(sum(b_pass), len(b_pass))}")
+    print(f"  candidate {wilson_interval(sum(c_pass), len(c_pass))}")
+    print(f"  delta     {delta}")
+    print(f"  {sig}")
+    print()
+    print(f"  fixed  ({len(fixed)}): {', '.join(fixed[:8])}")
+    print(f"  broken ({len(broken)}): {', '.join(broken[:8])}")
+    print()
+
+    if delta.low > 0:
+        verdict = "IMPROVEMENT"
+    elif delta.high < 0:
+        verdict = "REGRESSION"
+    else:
+        verdict = "INCONCLUSIVE"
+    print(f"  VERDICT: {verdict}")
+    if verdict == "INCONCLUSIVE":
+        print("  (confidence interval spans zero - not enough evidence either way)")
+
+    if args.fail_on_regression:
+        if verdict == "REGRESSION" or len(broken) > args.max_broken:
+            return 1
+    return 0
+
+
 def cmd_graders(args) -> int:
     print("Available graders:")
     for key in sorted(GraderRegistry.available()):
@@ -125,6 +267,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("graders", help="List available graders")
     p.set_defaults(func=cmd_graders)
+
+    p = sub.add_parser("run", help="Run a suite against a system and report results")
+    p.add_argument("suite")
+    p.add_argument("--system", required=True,
+                   help="'module:function' to evaluate. Importing runs that module, so point it only at code you control.")
+    p.add_argument("--grader", default="exact",
+                   help="a registered grader name, or 'module:factory' for a custom one")
+    p.add_argument("--name", default="", help="label for this system in the report")
+    p.add_argument("--path", default="", help="directory to add to sys.path before importing")
+    p.add_argument("--tags", default="", help="comma-separated tags to filter the suite")
+    p.add_argument("--limit", type=int, default=0, help="evaluate a random sample of N tasks")
+    p.add_argument("--parallel", type=int, default=1)
+    p.add_argument("--timeout", type=float, default=0)
+    p.add_argument("--retries", type=int, default=0)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--format", choices=["text", "json", "markdown"], default="text")
+    p.add_argument("--out", default="", help="write the run JSON here (for later comparison)")
+    p.add_argument("--html", default="", help="write a standalone HTML report here")
+    p.add_argument("--min-pass-rate", type=float, default=None,
+                   help="exit non-zero if the pass rate falls below this")
+    p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("compare", help="Compare two saved run JSON files")
+    p.add_argument("baseline")
+    p.add_argument("candidate")
+    p.add_argument("--iterations", type=int, default=10000)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--fail-on-regression", action="store_true",
+                   help="exit non-zero on a significant regression or too many broken tasks")
+    p.add_argument("--max-broken", type=int, default=0)
+    p.set_defaults(func=cmd_compare)
 
     return parser
 

@@ -107,6 +107,73 @@ def run_to_markdown(run: EvalRun, show_failures: int = 10) -> str:
     return "\n".join(lines)
 
 
+def tag_breakdown(run: EvalRun, level: float = 0.95) -> str:
+    by_tag = run.by_tag()
+    if not by_tag:
+        return "No tags on this suite."
+
+    rows = []
+    for tag in sorted(by_tag):
+        graded = [r for r in by_tag[tag] if r.outcome in (Outcome.PASS, Outcome.FAIL)]
+        if not graded:
+            continue
+        passed = sum(1 for r in graded if r.is_pass)
+        ci = wilson_interval(passed, len(graded), level)
+        rows.append((tag, passed, len(graded), ci))
+
+    if not rows:
+        return "No graded tasks with tags."
+
+    width = max(len(r[0]) for r in rows) + 2
+    lines = [f"{'tag':<{width}}{'pass rate':>11}{'95% CI':>20}{'n':>6}", "-" * (width + 37)]
+    for tag, passed, total, ci in sorted(rows, key=lambda r: r[3].point):
+        interval = f"[{ci.low:.1%}, {ci.high:.1%}]"
+        lines.append(f"{tag:<{width}}{passed / total:>10.1%}{interval:>20}{total:>6}")
+
+    thin = [r for r in rows if r[2] < 20]
+    if thin:
+        lines.append("")
+        lines.append(f"  note: {', '.join(r[0] for r in thin)} have fewer than 20 tasks, "
+                     "so those intervals are very wide")
+    return "\n".join(lines)
+
+
+def leaderboard_tiers(runs: dict[str, EvalRun], level: float = 0.95) -> str:
+    """Group systems whose intervals overlap into statistically tied tiers."""
+    if not runs:
+        return "No runs to compare."
+
+    entries = []
+    for name, run in runs.items():
+        ci = wilson_interval(run.passed, run.passed + run.failed, level)
+        entries.append((name, ci))
+    entries.sort(key=lambda e: -e[1].point)
+
+    tiers: list[list[tuple[str, Any]]] = []
+    for entry in entries:
+        placed = False
+        for tier in tiers:
+            if any(entry[1].low <= other[1].high and other[1].low <= entry[1].high for other in tier):
+                tier.append(entry)
+                placed = True
+                break
+        if not placed:
+            tiers.append([entry])
+
+    lines = [f"Systems grouped into statistically indistinguishable tiers ({int(level * 100)}% CI)", ""]
+    for i, tier in enumerate(tiers, 1):
+        names = ", ".join(n for n, _ in tier)
+        lines.append(f"  Tier {i}: {names}")
+        for name, ci in tier:
+            lines.append(f"      {name:<16}{ci.point:>7.1%}  [{ci.low:.1%}, {ci.high:.1%}]")
+    lines.append("")
+    if len(tiers) == 1:
+        lines.append("  All systems are within noise of each other on this suite.")
+    else:
+        lines.append(f"  Tier 1 is separated from Tier 2 by non-overlapping intervals.")
+    return "\n".join(lines)
+
+
 def leaderboard(runs: dict[str, EvalRun], level: float = 0.95) -> str:
     if not runs:
         return "No runs to compare."
