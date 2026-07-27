@@ -187,6 +187,30 @@ tracker = CostTracker(budget=5.00)
 run = evaluate(tracker.wrap(system, cost_fn=my_cost), suite, grader)
 ```
 
+An async system should be evaluated on the event loop rather than in a thread pool, so a few
+thousand in-flight API calls cost coroutines instead of OS threads:
+
+```python
+run = await evaluate_async(async_system, suite, grader, max_parallel=64)
+```
+
+Real APIs fail and throttle. `RetryPolicy` backs off geometrically with jitter, so a suite that
+trips a rate limit does not resend every task in lockstep, and `retry_on` keeps you from burning
+attempts on bugs that will never succeed. `RateLimiter` is a token bucket shared by every worker:
+`max_parallel` bounds concurrency, the limiter bounds throughput.
+
+```python
+run = evaluate(
+    system, suite, grader,
+    max_parallel=16,
+    retry_policy=RetryPolicy(max_attempts=4, base_delay_s=1.0, retry_on=is_transient),
+    rate_limiter=RateLimiter(rate_per_s=10, burst=20),
+)
+```
+
+Timeouts abandon the worker instead of waiting on it, so a system that ignores `timeout_s` costs
+one stranded thread rather than stalling the run.
+
 Contamination detection is included, because a benchmark score is meaningless if the test data
 was in the training set:
 
@@ -201,6 +225,7 @@ clean = clean_suite(suite, report)
 
 ```bash
 agenteval run suite.jsonl --system mypkg.models:gpt4 --out gpt4.json --html report.html
+agenteval run suite.jsonl --system mypkg.models:gpt4 --parallel 16 --rate-limit 10 --retries 3 --retry-backoff 1.0
 agenteval compare baseline.json candidate.json --fail-on-regression
 agenteval power --baseline 0.7 --delta 0.05     # how many tasks do I actually need?
 agenteval validate suite.jsonl

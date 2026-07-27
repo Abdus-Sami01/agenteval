@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Throughput and failure handling for evaluations that call real APIs.
+
+### Added
+- `evaluate_async()` for coroutine systems: concurrency is bounded by an
+  asyncio semaphore, so thousands of in-flight calls cost coroutines instead
+  of OS threads.
+- `RetryPolicy` with geometric backoff, jitter, a delay ceiling, and a
+  `retry_on` predicate so attempts are not spent on errors that cannot recover.
+  Accepted by `evaluate()`, `evaluate_async()`, and `iter_evaluate()`.
+- `RateLimiter`, a token bucket shared across workers, capping calls per second
+  independently of `max_parallel`.
+- `agenteval run --rate-limit` and `--retry-backoff`.
+
+### Fixed
+- `timeout_s` no longer waits on the worker it just abandoned: the executor is
+  shut down without joining, so a system that ignores its timeout strands one
+  thread instead of stalling the evaluation.
+- Parallel runs deliver `on_result` callbacks as tasks complete rather than in
+  one batch at the end, so `progress=True` tracks a live run.
+
+### Changed
+- `evaluate()` rejects `max_parallel < 1` and negative `retries` with
+  `ConfigurationError` instead of silently running sequentially.
+
 ## [0.2.0] - 2026-07-26
 
 Packaging and hardening pass. First release intended for public use.

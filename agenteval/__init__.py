@@ -108,7 +108,16 @@ from agenteval.report import (
     tag_breakdown,
 )
 from agenteval.resume import ResultStore, evaluate_resumable
-from agenteval.runner import detect_git_sha, evaluate, evaluate_many, iter_evaluate, repeat_evaluate
+from agenteval.runner import (
+    RateLimiter,
+    RetryPolicy,
+    detect_git_sha,
+    evaluate,
+    evaluate_async,
+    evaluate_many,
+    iter_evaluate,
+    repeat_evaluate,
+)
 from agenteval.sequential import (
     SequentialGate,
     SequentialRun,
@@ -202,6 +211,7 @@ __all__ = [
     "estimate_tokens",
     "EvalRun",
     "evaluate",
+    "evaluate_async",
     "evaluate_many",
     "evaluate_resumable",
     "evaluate_sequential",
@@ -250,6 +260,7 @@ __all__ = [
     "PredictionCache",
     "ProgressReporter",
     "RangeGrader",
+    "RateLimiter",
     "RegexGrader",
     "regression_gate",
     "reliability_diagram_text",
@@ -257,6 +268,7 @@ __all__ = [
     "required_repeats",
     "required_sample_size",
     "ResultStore",
+    "RetryPolicy",
     "RubricGrader",
     "run_to_dict",
     "run_to_html",

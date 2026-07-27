@@ -117,7 +117,7 @@ def cmd_run(args) -> int:
     import sys as _sys
 
     from agenteval.report import run_to_json, tag_breakdown
-    from agenteval.runner import evaluate
+    from agenteval.runner import RateLimiter, RetryPolicy, evaluate
 
     if args.path:
         _sys.path.insert(0, args.path)
@@ -140,10 +140,16 @@ def cmd_run(args) -> int:
     if callable(grader) and not hasattr(grader, "grade"):
         grader = grader()
 
+    policy = None
+    if args.retry_backoff > 0:
+        policy = RetryPolicy(max_attempts=args.retries + 1, base_delay_s=args.retry_backoff)
+    limiter = RateLimiter(args.rate_limit) if args.rate_limit > 0 else None
+
     run = evaluate(
         system, suite, grader,
         max_parallel=args.parallel, timeout_s=args.timeout, retries=args.retries,
         seed=args.seed, system_name=args.name or args.system,
+        retry_policy=policy, rate_limiter=limiter,
     )
 
     if args.format == "json":
@@ -278,6 +284,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--parallel", type=int, default=1)
     p.add_argument("--timeout", type=float, default=0)
     p.add_argument("--retries", type=int, default=0)
+    p.add_argument("--retry-backoff", type=float, default=0.0,
+                   help="seconds before the first retry, doubling with jitter after that")
+    p.add_argument("--rate-limit", type=float, default=0.0,
+                   help="cap system calls at this many per second across all workers")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--format", choices=["text", "json", "markdown"], default="text")
     p.add_argument("--out", default="", help="write the run JSON here (for later comparison)")
