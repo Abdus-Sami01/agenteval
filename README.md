@@ -221,6 +221,14 @@ into the JSON report with their steps intact, so a regression in tool use is vis
 If your agent already emits step dicts, `Trajectory.from_records()` accepts the usual key names
 (`tool`/`action`, `input`/`args`, `output`/`observation`).
 
+An agent that reports per-step cost is billed from it automatically, so spend is tracked once
+rather than declared twice:
+
+```python
+tracker = CostTracker(budget=5.00)
+run = evaluate(tracker.wrap(agent), suite, grader)     # charges Trajectory.total_cost
+```
+
 ---
 
 ## Running at scale
@@ -230,8 +238,8 @@ If your agent already emits step dicts, `Trajectory.from_records()` accepts the 
 for result in iter_evaluate(system, huge_suite, grader):
     save_to_db(result)
 
-# Survive a crash: each result is fsynced as it completes
-run, reused = evaluate_resumable(system, suite, grader, "run.jsonl")
+# Survive a crash: each result is fsynced as it completes, in parallel
+run, reused = evaluate_resumable(system, suite, grader, "run.jsonl", max_parallel=8)
 
 # Skip work you already paid for
 cache = PredictionCache(path="preds.json")

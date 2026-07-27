@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agenteval.graders.base import Grader
 from agenteval.types import (
@@ -18,6 +19,9 @@ from agenteval.types import (
     TaskResult,
     TaskSuite,
 )
+
+if TYPE_CHECKING:
+    from agenteval.runner import RateLimiter, RetryPolicy
 
 
 class ResultStore:
@@ -47,6 +51,8 @@ class ResultStore:
                 try:
                     record = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(record, dict):
                     continue
                 result = _result_from_dict(record)
                 if result:
@@ -101,6 +107,11 @@ class ResultStore:
         return len(self._results)
 
 
+def _stable_id(path: str) -> str:
+    """Run id that survives restarts, unlike hash() with its per-process seed."""
+    return hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:8]
+
+
 def evaluate_resumable(
     system: Callable[[Task], Any],
     suite: TaskSuite,
@@ -112,6 +123,9 @@ def evaluate_resumable(
     retries: int = 0,
     fresh: bool = False,
     on_result: Callable[[TaskResult], None] | None = None,
+    max_parallel: int = 1,
+    retry_policy: RetryPolicy | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> tuple[EvalRun, int]:
     from agenteval.runner import detect_git_sha, evaluate
 
@@ -125,20 +139,23 @@ def evaluate_resumable(
 
     start = time.perf_counter()
 
-    for task in pending:
-        step = evaluate(
-            system, TaskSuite(name=suite.name, tasks=[task]), grader,
+    def persist(result: TaskResult) -> None:
+        store.append(result)
+        if on_result:
+            on_result(result)
+
+    if pending:
+        evaluate(
+            system, TaskSuite(name=suite.name, tasks=pending), grader,
             seed=seed, timeout_s=timeout_s, retries=retries, system_name=system_name,
+            max_parallel=max_parallel, on_result=persist,
+            retry_policy=retry_policy, rate_limiter=rate_limiter,
         )
-        for result in step.results:
-            store.append(result)
-            if on_result:
-                on_result(result)
 
     ordered = [store.get(t.id) for t in suite.tasks if store.has(t.id)]
 
     metadata = RunMetadata(
-        run_id=f"resumable-{abs(hash(store_path)) % 10**8:08d}",
+        run_id=f"resumable-{_stable_id(store_path)}",
         suite_name=suite.name,
         system_name=system_name or getattr(system, "__name__", "system"),
         seed=seed,
@@ -163,8 +180,8 @@ def _result_to_dict(r: TaskResult) -> dict[str, Any]:
         "tags": list(r.tags),
         "weight": r.weight,
         "error": r.error,
-        "prediction": str(r.prediction)[:2000] if r.prediction is not None else None,
-        "expected": str(r.expected)[:2000] if r.expected is not None else None,
+        "prediction": _serialize(r.prediction),
+        "expected": _serialize(r.expected),
     }
     if r.score:
         d["score"] = {
@@ -175,6 +192,14 @@ def _result_to_dict(r: TaskResult) -> dict[str, Any]:
             "subscores": r.score.subscores,
         }
     return d
+
+
+def _serialize(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "as_dict"):
+        return value.as_dict()
+    return str(value)[:2000]
 
 
 def _result_from_dict(d: dict[str, Any]) -> TaskResult | None:

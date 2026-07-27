@@ -5,8 +5,8 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Agent trajectories, plus throughput and failure handling for evaluations that
-call real APIs.
+Agent trajectories, per-tag regression gates, and the throughput and failure
+handling an evaluation needs when it is calling real APIs.
 
 ### Added
 - `Trajectory` and `Step`: a system under test can now return the steps it took
@@ -36,6 +36,13 @@ call real APIs.
   into a real `EvalRun`, so a later job can compare, gate, and report on runs it
   did not produce. Outcomes, scores, subscores, tags, and weights round-trip
   exactly.
+- `evaluate_resumable(max_parallel=...)`, plus `retry_policy` and `rate_limiter`
+  passthrough. Crash-resumable runs were strictly sequential, which is the
+  opposite of what a run long enough to need resuming wants. Each result is
+  still fsynced as it lands.
+- `CostTracker.wrap()` bills a `Trajectory` from the sum of its step costs when
+  no `cost_fn` is given, so an agent that already tracks its own spend does not
+  have to report it twice.
 - `agenteval run --rate-limit` and `--retry-backoff`;
   `agenteval compare --max-tag-drop` and `--min-tag-tasks`.
 
@@ -49,6 +56,19 @@ call real APIs.
   miss instead of a match, which dragged down any object containing one.
 - The no-jsonschema fallback in `JSONSchemaGrader` accepted `True` where an
   integer or number was required, and never looked inside `properties`.
+- A string in a record's `tags` field was iterated character by character, so
+  `"tags": "safety"` silently became six one-character tags and every tag
+  breakdown built from it was wrong. Strings are now one tag, or several when
+  separated by commas or semicolons.
+- A blank `weight` (routine in CSV suites) raised a bare `ValueError` instead of
+  a typed `SuiteError`; it now defaults to 1.0, and a non-numeric weight names
+  the offending task.
+- A resumable store containing a valid JSON line that was not an object (`[]`)
+  raised `AttributeError` and abandoned the whole file, losing every completed
+  result after it.
+- `evaluate_resumable()` derived its run id from `hash()`, which is salted per
+  process, so the same store produced a different id on every resume. It is now
+  a digest of the absolute path.
 - `agenteval compare` and `agenteval report` reimplemented the comparison and
   summary logic against raw JSON, so they had drifted from the library: no
   McNemar test, no effect size, no per-tag view. Both now load the run and call

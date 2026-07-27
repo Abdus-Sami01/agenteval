@@ -10,8 +10,12 @@ from agenteval import (
     CorpusIndex,
     CostTracker,
     ExactMatchGrader,
+    OutcomeGrader,
     PairedLengthError,
+    Step,
+    StepBudgetGrader,
     Task,
+    Trajectory,
     adjust,
     analyze_stability,
     benjamini_hochberg,
@@ -621,3 +625,58 @@ class TestTagRegressionGate:
         base, cand = self.build()
         safety = next(g for g in tag_regression_gate(base, cand).gates if g.name == "tag:safety")
         assert "broken: s0" in safety.detail
+
+
+class TestTrajectoryCost:
+    def agent(self, per_step=(0.01, 0.02)):
+        def system(task):
+            return Trajectory(
+                steps=[Step(action=f"s{i}", cost=c) for i, c in enumerate(per_step)],
+                output=adder(task),
+            )
+        return system
+
+    def test_step_costs_are_billed_automatically(self, small_suite):
+        tracker = CostTracker()
+        evaluate(tracker.wrap(self.agent()), small_suite, OutcomeGrader(ExactMatchGrader()))
+        assert tracker.report.total == pytest.approx(0.09)
+        assert tracker.report.tasks == 3
+
+    def test_explicit_cost_fn_still_wins(self, small_suite):
+        tracker = CostTracker()
+        evaluate(
+            tracker.wrap(self.agent(), cost_fn=lambda t, p: 1.0),
+            small_suite, OutcomeGrader(ExactMatchGrader()),
+        )
+        assert tracker.report.total == pytest.approx(3.0)
+
+    def test_costless_trajectory_falls_back_to_fixed_cost(self, small_suite):
+        tracker = CostTracker()
+        evaluate(
+            tracker.wrap(self.agent(per_step=(0.0, 0.0)), fixed_cost=0.5),
+            small_suite, OutcomeGrader(ExactMatchGrader()),
+        )
+        assert tracker.report.total == pytest.approx(1.5)
+
+    def test_plain_predictions_are_unaffected(self, small_suite):
+        tracker = CostTracker()
+        evaluate(tracker.wrap(adder, fixed_cost=0.01), small_suite, ExactMatchGrader())
+        assert tracker.report.total == pytest.approx(0.03)
+
+    def test_budget_stops_a_spending_agent(self, math_suite):
+        tracker = CostTracker(budget=0.1)
+        run = evaluate(
+            tracker.wrap(self.agent(), estimate_fn=lambda t: 0.03),
+            math_suite, OutcomeGrader(ExactMatchGrader()),
+        )
+        assert tracker.report.stopped_early
+        assert run.errored > 0
+
+    def test_step_budget_grader_and_tracker_agree(self, small_suite):
+        tracker = CostTracker()
+        run = evaluate(
+            tracker.wrap(self.agent()), small_suite,
+            StepBudgetGrader(max_cost=0.05),
+        )
+        assert run.pass_rate == 1.0
+        assert tracker.report.per_task == pytest.approx(0.03)

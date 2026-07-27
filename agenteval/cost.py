@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agenteval.exceptions import BudgetExceededError
-from agenteval.types import EvalRun, Task
+from agenteval.types import EvalRun, Task, Trajectory
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,18 @@ class CostReport:
 BudgetExceeded = BudgetExceededError
 
 
+def _trajectory_cost(prediction: Any) -> float | None:
+    """Cost an agent already accounted for, step by step.
+
+    Returns None when the prediction is not a trajectory, or carries no
+    per-step costs, so the caller can fall back to its own estimate.
+    """
+    if not isinstance(prediction, Trajectory):
+        return None
+    total = prediction.total_cost
+    return total if total else None
+
+
 class CostTracker:
     def __init__(self, budget: float = 0.0, unit: str = "usd", hard_stop: bool = True):
         self._report = CostReport(unit=unit, budget=budget)
@@ -107,6 +119,13 @@ class CostTracker:
         fixed_cost: float = 0.0,
         estimate_fn: Callable[[Task], float] | None = None,
     ) -> Callable[[Task], Any]:
+        """Charge every call this system makes against the budget.
+
+        Without a `cost_fn`, a system returning a `Trajectory` is billed the
+        sum of its step costs, since an agent that tracks its own spend should
+        not have to report it twice. Everything else falls back to
+        `fixed_cost`.
+        """
         def costed(task: Task) -> Any:
             estimate = estimate_fn(task) if estimate_fn else fixed_cost
 
@@ -118,7 +137,12 @@ class CostTracker:
                 )
 
             prediction = system(task)
-            actual = cost_fn(task, prediction) if cost_fn else fixed_cost
+            if cost_fn:
+                actual = cost_fn(task, prediction)
+            else:
+                actual = _trajectory_cost(prediction)
+                if actual is None:
+                    actual = fixed_cost
             if actual:
                 self.charge(task.id, actual)
             return prediction

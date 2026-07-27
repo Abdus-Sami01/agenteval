@@ -24,15 +24,44 @@ def suite_from_records(
             raise SuiteError(f"record {i} missing required key {input_key!r}")
 
         known = {input_key, expected_key, id_key, "tags", "weight"}
+        identifier = str(record.get(id_key, f"task_{i}"))
         tasks.append(Task(
-            id=str(record.get(id_key, f"task_{i}")),
+            id=identifier,
             input=record[input_key],
             expected=record.get(expected_key),
-            tags=tuple(record.get("tags", ()) or ()),
-            weight=float(record.get("weight", 1.0)),
+            tags=_coerce_tags(record.get("tags")),
+            weight=_coerce_weight(record.get("weight"), identifier),
             metadata={k: v for k, v in record.items() if k not in known},
         ))
     return TaskSuite(name=name, tasks=tasks, description=description)
+
+
+def _coerce_tags(raw: Any) -> tuple[str, ...]:
+    """Accept a list of tags or a delimited string.
+
+    A bare string is a list of one tag, or several separated by commas or
+    semicolons - never a sequence of characters, which is what iterating a
+    string would silently produce.
+    """
+    if raw is None or raw == "":
+        return ()
+    if isinstance(raw, str):
+        return tuple(t.strip() for t in raw.replace(";", ",").split(",") if t.strip())
+    if isinstance(raw, dict):
+        raise SuiteError(f"tags must be a list or string, got {type(raw).__name__}")
+    try:
+        return tuple(str(t).strip() for t in raw if str(t).strip())
+    except TypeError as e:
+        raise SuiteError(f"tags must be a list or string, got {type(raw).__name__}") from e
+
+
+def _coerce_weight(raw: Any, task_id: str) -> float:
+    if raw is None or raw == "":
+        return 1.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as e:
+        raise SuiteError(f"task {task_id!r} has a non-numeric weight {raw!r}") from e
 
 
 def load_jsonl(path: str, name: str = "", **kwargs) -> TaskSuite:

@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from agenteval import (
     ExactMatchGrader,
+    OutcomeGrader,
     PredictionCache,
     ResultStore,
+    Step,
     SuiteError,
     SuiteFormatError,
     Task,
     TaskSuite,
+    Trajectory,
     compare,
     evaluate,
     evaluate_many,
@@ -42,6 +49,8 @@ from agenteval import (
     write_html,
 )
 from tests.helpers import adder, always_wrong, flaky, raises
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestSuiteConstruction:
@@ -593,3 +602,178 @@ class TestRunRoundTrip:
 
     def test_empty_payload_gives_an_empty_run(self):
         assert len(run_from_dict({})) == 0
+
+
+class TestResumeHardening:
+    def test_parallel_resume_persists_every_result(self, tmp_path, math_suite):
+        store = str(tmp_path / "run.jsonl")
+        run, _ = evaluate_resumable(adder, math_suite, ExactMatchGrader(), store, max_parallel=8)
+        assert len(run) == 30
+        assert len(ResultStore(store)) == 30
+
+    def test_parallel_resume_keeps_suite_order(self, tmp_path, math_suite):
+        store = str(tmp_path / "run.jsonl")
+        run, _ = evaluate_resumable(adder, math_suite, ExactMatchGrader(), store, max_parallel=8)
+        assert [r.task_id for r in run.results] == [t.id for t in math_suite.tasks]
+
+    def test_parallel_resume_reuses_prior_work(self, tmp_path, math_suite):
+        store = str(tmp_path / "run.jsonl")
+        half = TaskSuite(name="math", tasks=math_suite.tasks[:10])
+        evaluate_resumable(adder, half, ExactMatchGrader(), store, max_parallel=4)
+        _, reused = evaluate_resumable(adder, math_suite, ExactMatchGrader(), store, max_parallel=4)
+        assert reused == 10
+
+    def test_run_id_is_stable_across_processes(self, tmp_path, small_suite):
+        store = str(tmp_path / "run.jsonl")
+        first, _ = evaluate_resumable(adder, small_suite, ExactMatchGrader(), store)
+        second, _ = evaluate_resumable(adder, small_suite, ExactMatchGrader(), store)
+        assert first.metadata.run_id == second.metadata.run_id
+
+        expected = subprocess.run(
+            [sys.executable, "-c",
+             f"from agenteval.resume import _stable_id; print(_stable_id({store!r}))"],
+            capture_output=True, text=True, env={**os.environ, "PYTHONHASHSEED": "1"},
+            cwd=str(ROOT),
+        ).stdout.strip()
+        assert first.metadata.run_id.endswith(expected)
+
+    def test_truncated_final_line_is_skipped(self, tmp_path):
+        path = tmp_path / "run.jsonl"
+        path.write_text(
+            '{"task_id":"a","outcome":"pass"}\n{"task_id":"b","outcome":"pa',
+            encoding="utf-8",
+        )
+        store = ResultStore(str(path))
+        assert store.completed_ids == {"a"}
+
+    def test_a_corrupt_store_does_not_lose_later_lines(self, tmp_path):
+        path = tmp_path / "run.jsonl"
+        path.write_text(
+            '{"task_id":"a","outcome":"pass"}\n[]\n{"task_id":"c","outcome":"fail"}\n',
+            encoding="utf-8",
+        )
+        assert ResultStore(str(path)).completed_ids == {"a", "c"}
+
+    def test_resuming_after_corruption_reruns_the_lost_task(self, tmp_path, small_suite):
+        store_path = str(tmp_path / "run.jsonl")
+        evaluate_resumable(adder, small_suite, ExactMatchGrader(), store_path)
+        lines = (tmp_path / "run.jsonl").read_text(encoding="utf-8").splitlines()
+        (tmp_path / "run.jsonl").write_text("\n".join(lines[:-1] + ["garbage"]) + "\n",
+                                            encoding="utf-8")
+        run, reused = evaluate_resumable(adder, small_suite, ExactMatchGrader(), store_path)
+        assert reused == 2 and len(run) == 3
+
+    def test_later_record_wins_for_a_repeated_task(self, tmp_path):
+        path = tmp_path / "run.jsonl"
+        path.write_text(
+            '{"task_id":"a","outcome":"fail"}\n{"task_id":"a","outcome":"pass"}\n',
+            encoding="utf-8",
+        )
+        store = ResultStore(str(path))
+        assert len(store) == 1 and store.get("a").is_pass
+
+    def test_compact_removes_superseded_records(self, tmp_path):
+        path = tmp_path / "run.jsonl"
+        path.write_text(
+            '{"task_id":"a","outcome":"fail"}\n{"task_id":"a","outcome":"pass"}\n',
+            encoding="utf-8",
+        )
+        store = ResultStore(str(path))
+        store.compact()
+        assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+        assert ResultStore(str(path)).get("a").is_pass
+
+    def test_store_creates_missing_directories(self, tmp_path, small_suite):
+        store = str(tmp_path / "nested" / "deeper" / "run.jsonl")
+        run, _ = evaluate_resumable(adder, small_suite, ExactMatchGrader(), store)
+        assert len(run) == 3 and os.path.exists(store)
+
+    def test_trajectory_predictions_keep_their_steps(self, tmp_path, small_suite):
+        store = str(tmp_path / "run.jsonl")
+
+        def agent(task):
+            return Trajectory(steps=[Step(action="add")], output=adder(task))
+
+        evaluate_resumable(agent, small_suite, OutcomeGrader(ExactMatchGrader()), store)
+        stored = json.loads((tmp_path / "run.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        assert stored["prediction"]["steps"] == [{"action": "add"}]
+
+
+class TestRecordCoercion:
+    def test_a_string_tag_is_one_tag_not_six_characters(self):
+        suite = suite_from_records("s", [{"id": "a", "input": "x", "tags": "safety"}])
+        assert suite.tasks[0].tags == ("safety",)
+
+    def test_delimited_string_tags_are_split(self):
+        suite = suite_from_records("s", [
+            {"id": "a", "input": "x", "tags": "safety, hard"},
+            {"id": "b", "input": "x", "tags": "safety;hard"},
+        ])
+        assert suite.tasks[0].tags == ("safety", "hard")
+        assert suite.tasks[1].tags == ("safety", "hard")
+
+    def test_list_tags_are_normalized(self):
+        suite = suite_from_records("s", [{"id": "a", "input": "x", "tags": [" safety ", "", "hard"]}])
+        assert suite.tasks[0].tags == ("safety", "hard")
+
+    def test_missing_and_empty_tags(self):
+        suite = suite_from_records("s", [
+            {"id": "a", "input": "x"},
+            {"id": "b", "input": "x", "tags": ""},
+            {"id": "c", "input": "x", "tags": None},
+        ])
+        assert all(t.tags == () for t in suite.tasks)
+
+    def test_non_iterable_tags_are_rejected(self):
+        with pytest.raises(SuiteError):
+            suite_from_records("s", [{"id": "a", "input": "x", "tags": {"safety": True}}])
+
+    def test_blank_weight_defaults_to_one(self):
+        suite = suite_from_records("s", [{"id": "a", "input": "x", "weight": ""}])
+        assert suite.tasks[0].weight == 1.0
+
+    def test_numeric_string_weight_is_parsed(self):
+        assert suite_from_records("s", [{"id": "a", "input": "x", "weight": "2.5"}]).tasks[0].weight == 2.5
+
+    def test_non_numeric_weight_names_the_task(self):
+        with pytest.raises(SuiteError) as excinfo:
+            suite_from_records("s", [{"id": "a", "input": "x", "weight": "heavy"}])
+        assert "'a'" in str(excinfo.value)
+
+    def test_csv_with_blank_weight_column(self, tmp_path):
+        path = tmp_path / "s.csv"
+        path.write_text("id,input,expected,weight\na,1+1,2,\nb,2+2,4,3\n", encoding="utf-8")
+        suite = load_csv(str(path))
+        assert [t.weight for t in suite.tasks] == [1.0, 3.0]
+
+    def test_yaml_suite_with_string_tags(self, tmp_path):
+        path = tmp_path / "s.yaml"
+        path.write_text(
+            "name: y\ndescription: d\ntasks:\n  - id: a\n    input: 1+1\n    expected: '2'\n    tags: math\n",
+            encoding="utf-8",
+        )
+        suite = load_suite(str(path))
+        assert suite.name == "y" and suite.description == "d"
+        assert suite.tasks[0].tags == ("math",)
+
+    def test_yaml_list_form(self, tmp_path):
+        path = tmp_path / "plain.yaml"
+        path.write_text("- id: a\n  input: 1+1\n  expected: '2'\n", encoding="utf-8")
+        suite = load_suite(str(path))
+        assert len(suite) == 1 and suite.name == "plain"
+
+    def test_empty_yaml_is_an_empty_suite(self, tmp_path):
+        path = tmp_path / "empty.yml"
+        path.write_text("", encoding="utf-8")
+        assert len(load_suite(str(path))) == 0
+
+    def test_save_and_reload_preserves_tags_and_weights(self, tmp_path):
+        suite = suite_from_records("s", [
+            {"id": "a", "input": "x", "expected": "y", "tags": "safety", "weight": 2.0, "note": "keep"},
+        ])
+        path = str(tmp_path / "out.json")
+        save_suite(suite, path)
+        restored = load_suite(path)
+        assert restored.tasks[0].tags == ("safety",)
+        assert restored.tasks[0].weight == 2.0
+        assert restored.tasks[0].metadata["note"] == "keep"
