@@ -33,7 +33,7 @@ from agenteval import (
 )
 from agenteval.graders.numeric import extract_number
 from agenteval.graders.rubric import parse_judge_score
-from agenteval.graders.structured import coerce_json
+from agenteval.graders.structured import _shallow_schema_check, coerce_json
 
 
 def make_task(expected, inp="question"):
@@ -639,3 +639,86 @@ class TestTrajectoryComposition:
         score = grader.grade(right_answer_wrong_process, task)
         assert not score.passed
         assert score.subscores["answer"] == 1.0 and score.subscores["tools"] == 0.0
+
+
+class TestShallowSchemaFallback:
+    """The no-jsonschema path, exercised directly since jsonschema is a test dep."""
+
+    def test_type_checks(self):
+        assert _shallow_schema_check({"a": 1}, {"type": "object"})
+        assert not _shallow_schema_check([1], {"type": "object"})
+        assert _shallow_schema_check("x", {"type": "string"})
+        assert not _shallow_schema_check(1, {"type": "string"})
+
+    def test_booleans_are_not_integers(self):
+        assert not _shallow_schema_check(True, {"type": "integer"})
+        assert not _shallow_schema_check(False, {"type": "number"})
+        assert _shallow_schema_check(True, {"type": "boolean"})
+
+    def test_required_keys_enforced(self):
+        assert _shallow_schema_check({"a": 1}, {"required": ["a"]})
+        assert not _shallow_schema_check({"b": 1}, {"required": ["a"]})
+
+    def test_nested_properties_are_checked(self):
+        schema = {"type": "object", "properties": {"n": {"type": "integer"}}}
+        assert _shallow_schema_check({"n": 3}, schema)
+        assert not _shallow_schema_check({"n": "three"}, schema)
+
+    def test_absent_optional_property_is_fine(self):
+        assert _shallow_schema_check({}, {"type": "object", "properties": {"n": {"type": "integer"}}})
+
+    def test_unknown_type_is_ignored(self):
+        assert _shallow_schema_check("anything", {"type": "null"})
+
+
+class TestStructuralLists:
+    def task(self, expected):
+        return Task(id="t", input="q", expected=expected)
+
+    def test_ordered_lists_must_line_up(self):
+        grader = StructuralGrader(ignore_order=False)
+        assert grader.grade([1, 2, 3], self.task([1, 2, 3])).passed
+        assert not grader.grade([3, 2, 1], self.task([1, 2, 3])).passed
+
+    def test_unordered_lists_ignore_position(self):
+        assert StructuralGrader(ignore_order=True).grade([3, 1, 2], self.task([1, 2, 3])).passed
+
+    def test_partial_credit_on_ordered_lists(self):
+        score = StructuralGrader(ignore_order=False).grade([1, 2, 9], self.task([1, 2, 3]))
+        assert score.value == pytest.approx(2 / 3)
+
+    def test_partial_credit_on_unordered_lists(self):
+        score = StructuralGrader(ignore_order=True).grade([3, 1], self.task([1, 2, 3]))
+        assert score.value == pytest.approx(2 / 3)
+        assert "2/3 items matched" in score.detail
+
+    def test_short_prediction_reports_missing_items(self):
+        score = StructuralGrader(ignore_order=False).grade([1], self.task([1, 2, 3]))
+        assert "missing" in score.detail and score.value == pytest.approx(1 / 3)
+
+    def test_extra_items_do_not_earn_credit(self):
+        score = StructuralGrader(ignore_order=True).grade([1, 2, 3, 4, 5], self.task([1, 2, 3]))
+        assert score.passed
+
+    def test_type_mismatch_is_named(self):
+        score = StructuralGrader().grade('{"a": 1}', self.task([1, 2]))
+        assert not score.passed and "expected array" in score.detail
+
+    def test_nested_lists_of_objects(self):
+        gold = {"items": [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]}
+        grader = StructuralGrader(ignore_order=False)
+        assert grader.grade(gold, self.task(gold)).passed
+        wrong = {"items": [{"id": 1, "name": "a"}, {"id": 2, "name": "z"}]}
+        score = grader.grade(wrong, self.task(gold))
+        assert not score.passed and "items[1].name" in score.detail
+
+    def test_empty_expected_list_is_a_pass(self):
+        assert StructuralGrader(ignore_order=True).grade([], self.task([])).passed
+
+    def test_partial_credit_can_be_switched_off(self):
+        score = StructuralGrader(ignore_order=False, partial_credit=False).grade([1, 2, 9], self.task([1, 2, 3]))
+        assert score.value == 0.0
+
+    def test_empty_expected_list_inside_an_object(self):
+        gold = {"items": [], "n": 1}
+        assert StructuralGrader(ignore_order=True).grade(gold, self.task(gold)).passed

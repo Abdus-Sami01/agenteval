@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from agenteval.exceptions import SuiteFormatError
 from agenteval.stats import wilson_interval
-from agenteval.types import EvalRun, Outcome, TaskResult
+from agenteval.types import EvalRun, Outcome, RunMetadata, Score, TaskResult
 
 
 def run_to_dict(run: EvalRun, include_predictions: bool = True) -> dict[str, Any]:
@@ -27,6 +28,47 @@ def run_to_dict(run: EvalRun, include_predictions: bool = True) -> dict[str, Any
 
 def run_to_json(run: EvalRun, indent: int = 2, include_predictions: bool = True) -> str:
     return json.dumps(run_to_dict(run, include_predictions), indent=indent, default=str)
+
+
+def run_from_dict(payload: dict[str, Any]) -> EvalRun:
+    """Rebuild an `EvalRun` from `run_to_dict()` output.
+
+    Predictions come back as whatever JSON held, since the original objects
+    were serialized for reading rather than for round-tripping. Everything
+    the statistics touch - outcomes, scores, tags, weights - is exact.
+    """
+    meta = payload.get("metadata", {}) or {}
+    known = {"run_id", "suite", "system", "seed", "started_at", "python", "platform", "git_sha", "notes"}
+    metadata = RunMetadata(
+        run_id=str(meta.get("run_id", "")),
+        suite_name=str(meta.get("suite", "")),
+        system_name=str(meta.get("system", "")),
+        seed=int(meta.get("seed", 0) or 0),
+        git_sha=str(meta.get("git_sha", "")),
+        notes=str(meta.get("notes", "")),
+        extra={k: v for k, v in meta.items() if k not in known},
+    )
+    if meta.get("started_at") is not None:
+        metadata.started_at = float(meta["started_at"])
+    if meta.get("python"):
+        metadata.python_version = str(meta["python"])
+    if meta.get("platform"):
+        metadata.platform_name = str(meta["platform"])
+
+    return EvalRun(
+        metadata=metadata,
+        results=[_result_from_dict(d) for d in payload.get("results", []) or []],
+        total_ms=float((payload.get("summary", {}) or {}).get("total_ms", 0.0) or 0.0),
+    )
+
+
+def run_from_json(text: str) -> EvalRun:
+    return run_from_dict(json.loads(text))
+
+
+def load_run(path: str) -> EvalRun:
+    with open(path, encoding="utf-8") as f:
+        return run_from_dict(json.load(f))
 
 
 def run_to_text(run: EvalRun, show_failures: int = 10) -> str:
@@ -245,6 +287,8 @@ def _result_to_dict(r: TaskResult, include_predictions: bool) -> dict[str, Any]:
             d["subscores"] = {k: round(v, 4) for k, v in r.score.subscores.items()}
     if r.error:
         d["error"] = r.error
+    if r.weight != 1.0:
+        d["weight"] = r.weight
     if include_predictions:
         d["prediction"] = _serialize(r.prediction)
         d["expected"] = _serialize(r.expected)
@@ -257,3 +301,37 @@ def _serialize(value: Any) -> Any:
     if hasattr(value, "as_dict"):
         return value.as_dict()
     return str(value)[:500]
+
+
+def _result_from_dict(d: dict[str, Any]) -> TaskResult:
+    task_id = d.get("task_id")
+    if not task_id:
+        raise SuiteFormatError("<run>", "a result is missing its task_id")
+
+    try:
+        outcome = Outcome(d.get("outcome", "error"))
+    except ValueError:
+        outcome = Outcome.ERROR
+
+    score = None
+    if d.get("score") is not None:
+        score = Score(
+            value=float(d["score"]),
+            passed=outcome == Outcome.PASS,
+            grader=str(d.get("grader", "")),
+            detail=str(d.get("detail", "")),
+            subscores={k: float(v) for k, v in (d.get("subscores") or {}).items()},
+        )
+
+    return TaskResult(
+        task_id=str(task_id),
+        outcome=outcome,
+        score=score,
+        prediction=d.get("prediction"),
+        expected=d.get("expected"),
+        error=str(d.get("error", "") or ""),
+        elapsed_ms=float(d.get("elapsed_ms", 0.0) or 0.0),
+        attempts=int(d.get("attempts", 1) or 1),
+        tags=tuple(d.get("tags", ()) or ()),
+        weight=float(d.get("weight", 1.0) or 1.0),
+    )

@@ -30,3 +30,10 @@ def flaky(rate: float, salt: str = ""):
         return "0"
 
     return system
+
+
+def safety_regressor(task: Task) -> str:
+    """Correct except on tasks tagged 'safety', for per-tag gate tests."""
+    if "safety" in task.tags:
+        return "0"
+    return adder(task)

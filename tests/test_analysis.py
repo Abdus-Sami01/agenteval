@@ -23,6 +23,7 @@ from agenteval import (
     cohens_kappa,
     compare,
     compare_all,
+    compare_by_tag,
     cost_efficiency,
     detect_contamination,
     estimate_tokens,
@@ -40,6 +41,7 @@ from agenteval import (
     repeat_evaluate,
     required_repeats,
     suite_from_records,
+    tag_regression_gate,
     token_cost,
     validate_judge,
 )
@@ -477,3 +479,145 @@ class TestCost:
 
     def test_cost_efficiency_no_data(self):
         assert "No cost data" in cost_efficiency({}, {})
+
+
+class TestStabilityInternals:
+    def test_icc_is_high_when_difficulty_is_consistent(self, math_suite):
+        def half_hard(task):
+            index = int(str(task.input).split("+")[0])
+            return adder(task) if index <= 15 else "0"
+
+        runs = repeat_evaluate(half_hard, math_suite, ExactMatchGrader(), repeats=4)
+        assert intraclass_correlation(runs) > 0.9
+
+    def test_icc_is_low_when_outcomes_are_noise(self, math_suite):
+        import random
+
+        rng = random.Random(7)
+        runs = [
+            evaluate(lambda t: adder(t) if rng.random() < 0.5 else "0", math_suite, ExactMatchGrader())
+            for _ in range(6)
+        ]
+        assert intraclass_correlation(runs) < 0.3
+
+    def test_icc_ignores_tasks_seen_only_once(self, math_suite):
+        runs = repeat_evaluate(adder, math_suite, ExactMatchGrader(), repeats=2)
+        runs[0].results = runs[0].results[:5]
+        assert intraclass_correlation(runs) == 0.0
+
+    def test_icc_is_zero_without_any_variance(self, small_suite):
+        runs = repeat_evaluate(adder, small_suite, ExactMatchGrader(), repeats=3)
+        assert intraclass_correlation(runs) == 0.0
+
+    def test_summary_reports_flaky_tasks(self, math_suite):
+        import random
+
+        rng = random.Random(3)
+        runs = [
+            evaluate(lambda t: adder(t) if rng.random() < 0.5 else "0", math_suite, ExactMatchGrader())
+            for _ in range(5)
+        ]
+        text = analyze_stability(runs).summary()
+        assert "flakiest tasks" in text
+        assert "WARNING" in text
+
+    def test_summary_of_a_stable_system_is_reassuring(self, math_suite):
+        runs = repeat_evaluate(adder, math_suite, ExactMatchGrader(), repeats=3)
+        text = analyze_stability(runs).summary()
+        assert "stable enough" in text
+        assert "flakiest tasks" not in text
+
+    def test_empty_report_intervals_are_degenerate(self):
+        report = analyze_stability([])
+        assert report.combined_interval().low == 0.0
+        assert report.naive_interval().high == 1.0
+        assert report.spread == 0.0 and report.flake_rate == 0.0
+
+
+class TestCompareByTag:
+    def build(self):
+        records = (
+            [{"id": f"s{i}", "input": "x", "expected": "ok", "tags": ["safety"]} for i in range(10)]
+            + [{"id": f"e{i}", "input": "x", "expected": "ok", "tags": ["easy"]} for i in range(10)]
+        )
+        suite = suite_from_records("m", records)
+        base = evaluate(lambda t: "ok", suite, ExactMatchGrader(), system_name="base")
+        cand = evaluate(
+            lambda t: "no" if t.id.startswith("s") else "ok",
+            suite, ExactMatchGrader(), system_name="cand",
+        )
+        return base, cand
+
+    def test_finds_the_regressed_slice(self):
+        base, cand = self.build()
+        by_tag = compare_by_tag(base, cand)
+        assert by_tag["safety"].verdict() == "REGRESSION"
+        assert by_tag["easy"].verdict() == "INCONCLUSIVE"
+
+    def test_tag_is_recorded_on_the_comparison(self):
+        base, cand = self.build()
+        comparison = compare_by_tag(base, cand)["safety"]
+        assert comparison.tag == "safety"
+        assert "[tag: safety]" in comparison.summary()
+
+    def test_only_shared_tags_compared(self):
+        base, cand = self.build()
+        cand.results[0].tags = ("safety", "new_tag")
+        assert set(compare_by_tag(base, cand)) == {"safety", "easy"}
+
+    def test_explicit_tag_selection(self):
+        base, cand = self.build()
+        assert set(compare_by_tag(base, cand, tags={"safety"})) == {"safety"}
+
+    def test_untagged_runs_produce_nothing(self, small_suite):
+        base = evaluate(adder, small_suite, ExactMatchGrader())
+        assert compare_by_tag(base, base) == {}
+
+
+class TestTagRegressionGate:
+    def build(self, broken=5, safety=10):
+        records = (
+            [{"id": f"s{i}", "input": "x", "expected": "ok", "tags": ["safety"]} for i in range(safety)]
+            + [{"id": f"e{i}", "input": "x", "expected": "ok", "tags": ["easy"]} for i in range(20)]
+        )
+        suite = suite_from_records("m", records)
+        broken_ids = {f"s{i}" for i in range(broken)}
+        base = evaluate(lambda t: "ok", suite, ExactMatchGrader(), system_name="base")
+        cand = evaluate(
+            lambda t: "no" if t.id in broken_ids else "ok",
+            suite, ExactMatchGrader(), system_name="cand",
+        )
+        return base, cand
+
+    def test_blocks_a_tag_regression_the_aggregate_hides(self):
+        base, cand = self.build()
+        report = tag_regression_gate(base, cand, max_drop=0.05)
+        assert not report.passed
+        assert [g.name for g in report.failures] == ["tag:safety"]
+
+    def test_healthy_tags_pass(self):
+        base, cand = self.build(broken=0)
+        assert tag_regression_gate(base, cand).passed
+
+    def test_small_tags_are_reported_but_not_enforced(self):
+        base, cand = self.build(broken=2, safety=3)
+        report = tag_regression_gate(base, cand, min_tasks=5)
+        safety = next(g for g in report.gates if g.name == "tag:safety")
+        assert safety.passed
+        assert "not enforced" in safety.detail
+
+    def test_per_tag_thresholds(self):
+        base, cand = self.build(broken=5)
+        strict = tag_regression_gate(base, cand, max_drop={"safety": 0.0})
+        lenient = tag_regression_gate(base, cand, max_drop={"safety": 0.9})
+        assert not strict.passed and lenient.passed
+
+    def test_threshold_dict_falls_back_for_unlisted_tags(self):
+        base, cand = self.build(broken=5)
+        report = tag_regression_gate(base, cand, max_drop={"easy": 0.5})
+        assert not report.passed
+
+    def test_broken_task_ids_appear_in_the_detail(self):
+        base, cand = self.build()
+        safety = next(g for g in tag_regression_gate(base, cand).gates if g.name == "tag:safety")
+        assert "broken: s0" in safety.detail

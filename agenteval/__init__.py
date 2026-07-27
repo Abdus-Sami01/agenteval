@@ -37,7 +37,14 @@ from agenteval.calibration import (
     log_loss,
     reliability_diagram_text,
 )
-from agenteval.compare import Comparison, compare, gate, regression_gate
+from agenteval.compare import (
+    Comparison,
+    compare,
+    compare_by_tag,
+    gate,
+    regression_gate,
+    tag_regression_gate,
+)
 from agenteval.contamination import (
     ContaminationHit,
     ContaminationReport,
@@ -104,6 +111,9 @@ from agenteval.report import (
     failure_digest,
     leaderboard,
     leaderboard_tiers,
+    load_run,
+    run_from_dict,
+    run_from_json,
     run_to_dict,
     run_to_json,
     run_to_markdown,
@@ -200,6 +210,7 @@ __all__ = [
     "cohens_kappa",
     "compare",
     "compare_all",
+    "compare_by_tag",
     "Comparison",
     "ConfigurationError",
     "configure_logging",
@@ -245,6 +256,7 @@ __all__ = [
     "load_csv",
     "load_json",
     "load_jsonl",
+    "load_run",
     "load_suite",
     "load_yaml",
     "log_loss",
@@ -276,6 +288,8 @@ __all__ = [
     "ResultStore",
     "RetryPolicy",
     "RubricGrader",
+    "run_from_dict",
+    "run_from_json",
     "run_to_dict",
     "run_to_html",
     "run_to_json",
@@ -300,6 +314,7 @@ __all__ = [
     "SuiteFormatError",
     "SystemMatrix",
     "tag_breakdown",
+    "tag_regression_gate",
     "Task",
     "TaskResult",
     "TaskStability",

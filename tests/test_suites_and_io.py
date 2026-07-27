@@ -14,6 +14,7 @@ from agenteval import (
     SuiteFormatError,
     Task,
     TaskSuite,
+    compare,
     evaluate,
     evaluate_many,
     evaluate_resumable,
@@ -25,7 +26,10 @@ from agenteval import (
     load_csv,
     load_json,
     load_jsonl,
+    load_run,
     load_suite,
+    run_from_dict,
+    run_from_json,
     run_to_dict,
     run_to_html,
     run_to_json,
@@ -37,7 +41,7 @@ from agenteval import (
     validate_suite,
     write_html,
 )
-from tests.helpers import adder, always_wrong, flaky
+from tests.helpers import adder, always_wrong, flaky, raises
 
 
 class TestSuiteConstruction:
@@ -455,6 +459,60 @@ class TestCLI:
                      "--fail-on-regression"])
         assert code == 1, "a real regression must fail the build"
 
+    def test_compare_command_blocks_a_tag_regression(self, tmp_path):
+        from agenteval.cli import main
+
+        suite = tmp_path / "s.jsonl"
+        rows = [{"id": f"s{i}", "input": f"{i}+{i}", "expected": str(i * 2), "tags": ["safety"]}
+                for i in range(1, 11)]
+        rows += [{"id": f"e{i}", "input": f"{i}+{i}", "expected": str(i * 2), "tags": ["easy"]}
+                 for i in range(11, 31)]
+        suite.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+        good = tmp_path / "good.json"
+        partial = tmp_path / "partial.json"
+        main(["run", str(suite), "--system", "tests.helpers:adder", "--out", str(good)])
+        main(["run", str(suite), "--system", "tests.helpers:safety_regressor", "--out", str(partial)])
+
+        assert main(["compare", str(good), str(partial), "--iterations", "500"]) == 0
+        code = main(["compare", str(good), str(partial), "--iterations", "500",
+                     "--max-tag-drop", "0.05"])
+        assert code == 1, "a tag-level regression must fail the build"
+
+    def test_compare_command_reports_untagged_runs_cleanly(self, tmp_path, capsys):
+        from agenteval.cli import main
+
+        suite = tmp_path / "s.jsonl"
+        suite.write_text('{"id":"a","input":"1+1","expected":"2"}\n', encoding="utf-8")
+        out = tmp_path / "r.json"
+        main(["run", str(suite), "--system", "tests.helpers:adder", "--out", str(out)])
+        assert main(["compare", str(out), str(out), "--iterations", "200",
+                     "--max-tag-drop", "0.05"]) == 0
+
+    def test_compare_command_needs_overlapping_ids(self, tmp_path):
+        from agenteval.cli import main
+
+        left = tmp_path / "l.jsonl"
+        right = tmp_path / "r.jsonl"
+        left.write_text('{"id":"a","input":"1+1","expected":"2"}\n', encoding="utf-8")
+        right.write_text('{"id":"z","input":"1+1","expected":"2"}\n', encoding="utf-8")
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        main(["run", str(left), "--system", "tests.helpers:adder", "--out", str(a)])
+        main(["run", str(right), "--system", "tests.helpers:adder", "--out", str(b)])
+        assert main(["compare", str(a), str(b)]) == 2
+
+    def test_report_command_renders_a_saved_run(self, tmp_path, capsys):
+        from agenteval.cli import main
+
+        suite = tmp_path / "s.jsonl"
+        suite.write_text('{"id":"a","input":"1+1","expected":"2","tags":["t"]}\n', encoding="utf-8")
+        out = tmp_path / "r.json"
+        main(["run", str(suite), "--system", "tests.helpers:adder", "--out", str(out)])
+        capsys.readouterr()
+        assert main(["report", str(out)]) == 0
+        text = capsys.readouterr().out
+        assert "pass rate" in text and "t" in text
+
     def test_load_object_requires_module_colon_attr(self):
         from agenteval.cli import load_object
 
@@ -466,3 +524,72 @@ class TestCLI:
 
         with pytest.raises(AttributeError):
             load_object("tests.helpers:does_not_exist")
+
+
+class TestRunRoundTrip:
+    def build(self, tags=("x",), weight=1.0):
+        suite = suite_from_records("m", [
+            {"id": "a", "input": "1+1", "expected": "2", "tags": list(tags), "weight": weight},
+            {"id": "b", "input": "2+2", "expected": "5"},
+        ])
+        return evaluate(adder, suite, ExactMatchGrader(), system_name="sys", notes="nightly")
+
+    def test_outcomes_and_scores_survive(self):
+        original = self.build()
+        restored = run_from_json(run_to_json(original))
+        assert [r.outcome for r in restored.results] == [r.outcome for r in original.results]
+        assert restored.pass_rate == original.pass_rate
+        assert restored.results[0].score.value == 1.0
+
+    def test_metadata_survives(self):
+        original = self.build()
+        restored = run_from_dict(run_to_dict(original))
+        assert restored.metadata.system_name == "sys"
+        assert restored.metadata.suite_name == "m"
+        assert restored.metadata.notes == "nightly"
+        assert restored.metadata.run_id == original.metadata.run_id
+
+    def test_tags_and_weights_survive(self):
+        restored = run_from_dict(run_to_dict(self.build(tags=("safety", "hard"), weight=3.0)))
+        assert restored.results[0].tags == ("safety", "hard")
+        assert restored.results[0].weight == 3.0
+        assert restored.mean_score == pytest.approx(0.75)
+
+    def test_extra_metadata_is_preserved(self):
+        original = self.build()
+        original.metadata.extra["model"] = "gpt-4o"
+        assert run_from_dict(run_to_dict(original)).metadata.extra["model"] == "gpt-4o"
+
+    def test_errors_survive(self, small_suite):
+        original = evaluate(raises, small_suite, ExactMatchGrader())
+        restored = run_from_dict(run_to_dict(original))
+        assert restored.errored == 3
+        assert "model offline" in restored.results[0].error
+
+    def test_comparison_of_restored_runs_matches(self, math_suite):
+        base = evaluate(adder, math_suite, ExactMatchGrader(), system_name="base")
+        cand = evaluate(always_wrong, math_suite, ExactMatchGrader(), system_name="cand")
+        direct = compare(base, cand, iterations=500)
+        restored = compare(run_from_dict(run_to_dict(base)), run_from_dict(run_to_dict(cand)),
+                           iterations=500)
+        assert restored.delta == direct.delta
+        assert restored.broken == direct.broken
+
+    def test_load_run_reads_a_file(self, tmp_path):
+        path = tmp_path / "run.json"
+        path.write_text(run_to_json(self.build()), encoding="utf-8")
+        assert load_run(str(path)).metadata.system_name == "sys"
+
+    def test_unknown_outcome_degrades_to_error(self):
+        payload = run_to_dict(self.build())
+        payload["results"][0]["outcome"] = "exploded"
+        assert run_from_dict(payload).results[0].outcome.value == "error"
+
+    def test_result_without_task_id_is_rejected(self):
+        payload = run_to_dict(self.build())
+        del payload["results"][0]["task_id"]
+        with pytest.raises(SuiteFormatError):
+            run_from_dict(payload)
+
+    def test_empty_payload_gives_an_empty_run(self):
+        assert len(run_from_dict({})) == 0

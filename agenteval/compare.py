@@ -19,6 +19,7 @@ from agenteval.types import EvalRun, GateReport, GateResult, Outcome
 class Comparison:
     baseline_name: str
     candidate_name: str
+    tag: str = ""
     paired_ids: list[str] = field(default_factory=list)
     baseline_rate: Interval | None = None
     candidate_rate: Interval | None = None
@@ -57,8 +58,9 @@ class Comparison:
         return "INCONCLUSIVE"
 
     def summary(self) -> str:
+        label = f" [tag: {self.tag}]" if self.tag else ""
         lines = [
-            f"{self.baseline_name} -> {self.candidate_name}  ({len(self.paired_ids)} paired tasks)",
+            f"{self.baseline_name} -> {self.candidate_name}{label}  ({len(self.paired_ids)} paired tasks)",
             "",
         ]
         if self.baseline_rate and self.candidate_rate:
@@ -207,6 +209,88 @@ def regression_gate(
         report.gates.append(GateResult(
             "no_significant_regression", not regressed, 1.0 if regressed else 0.0, 0.0,
             f"CI {comparison.score_delta}" if comparison.score_delta else "no interval",
+        ))
+
+    return report
+
+
+def compare_by_tag(
+    baseline: EvalRun,
+    candidate: EvalRun,
+    tags: set[str] | None = None,
+    level: float = 0.95,
+    iterations: int = 10_000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> dict[str, Comparison]:
+    """Compare two runs separately within each tag.
+
+    An aggregate that improves can still hide a slice that got worse: safety
+    tasks regressing while easy ones improve nets out to a win. This runs the
+    same paired comparison inside each tag so that shows up.
+    """
+    shared_tags = tags if tags is not None else _tags_in(baseline) & _tags_in(candidate)
+
+    comparisons: dict[str, Comparison] = {}
+    for tag in sorted(shared_tags):
+        sub = compare(
+            _restrict(baseline, tag), _restrict(candidate, tag),
+            level=level, iterations=iterations, seed=seed, alpha=alpha,
+        )
+        sub.tag = tag
+        comparisons[tag] = sub
+    return comparisons
+
+
+def _tags_in(run: EvalRun) -> set[str]:
+    return {t for r in run.results for t in r.tags}
+
+
+def _restrict(run: EvalRun, tag: str) -> EvalRun:
+    return EvalRun(
+        metadata=run.metadata,
+        results=[r for r in run.results if tag in r.tags],
+        total_ms=run.total_ms,
+    )
+
+
+def tag_regression_gate(
+    baseline: EvalRun,
+    candidate: EvalRun,
+    max_drop: float | dict[str, float] = 0.05,
+    min_tasks: int = 5,
+    level: float = 0.95,
+    iterations: int = 10_000,
+    seed: int = 0,
+) -> GateReport:
+    """Fail the build when any tag regresses, even if the total looks fine.
+
+    Tags with fewer than `min_tasks` paired tasks are reported but never
+    failed: at that size a swing of one task looks like a collapse, and
+    blocking merges on that noise trains people to ignore the gate.
+    """
+    report = GateReport()
+    comparisons = compare_by_tag(
+        baseline, candidate, level=level, iterations=iterations, seed=seed,
+    )
+
+    for tag, comparison in comparisons.items():
+        threshold = max_drop.get(tag, 0.05) if isinstance(max_drop, dict) else max_drop
+        n = len(comparison.paired_ids)
+        drop = -comparison.delta if comparison.delta < 0 else 0.0
+
+        if n < min_tasks:
+            report.gates.append(GateResult(
+                f"tag:{tag}", True, drop, threshold,
+                f"only {n} paired task(s), below the {min_tasks} needed to gate - not enforced",
+            ))
+            continue
+
+        detail = f"{n} paired tasks, mean score {comparison.delta:+.4f}"
+        if comparison.broken:
+            detail += f", broken: {', '.join(comparison.broken[:4])}"
+        report.gates.append(GateResult(
+            f"tag:{tag}", drop <= threshold, drop, threshold, detail,
         ))
 
     return report

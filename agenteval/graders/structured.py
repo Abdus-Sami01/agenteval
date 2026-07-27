@@ -175,7 +175,7 @@ def _compare(pred: Any, gold: Any, ignore_order: bool, path: str) -> tuple[int, 
             pred_repr = sorted(json.dumps(p, sort_keys=True, default=str) for p in pred)
             matched = sum(1 for g in gold_repr if g in pred_repr)
             problems = [] if matched == len(gold_repr) else [f"{path or '<root>'}: {matched}/{len(gold_repr)} items matched"]
-            return matched, max(len(gold_repr), 1), problems
+            return matched, len(gold_repr), problems
         matched = total = 0
         problems = []
         for idx, gold_item in enumerate(gold):
@@ -212,10 +212,15 @@ def _shallow_schema_check(value: Any, schema: dict) -> bool:
     if expected_type and expected_type in type_map:
         if not isinstance(value, type_map[expected_type]):
             return False
-        if expected_type == "boolean" and not isinstance(value, bool):
+        if expected_type in ("number", "integer") and isinstance(value, bool):
             return False
     if isinstance(value, dict):
         for key in schema.get("required", []):
             if key not in value:
                 return False
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for key, subschema in properties.items():
+                if key in value and isinstance(subschema, dict) and not _shallow_schema_check(value[key], subschema):
+                    return False
     return True

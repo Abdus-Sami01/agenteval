@@ -28,7 +28,16 @@ call real APIs.
   Accepted by `evaluate()`, `evaluate_async()`, and `iter_evaluate()`.
 - `RateLimiter`, a token bucket shared across workers, capping calls per second
   independently of `max_parallel`.
-- `agenteval run --rate-limit` and `--retry-backoff`.
+- `compare_by_tag()` and `tag_regression_gate()`: an aggregate that improves can
+  hide a slice that got worse, so the same paired comparison now runs inside
+  each tag. Tags below `min_tasks` paired tasks are reported but never
+  enforced, since a one-task swing in a tiny slice is noise.
+- `run_from_dict()`, `run_from_json()`, and `load_run()`: saved runs load back
+  into a real `EvalRun`, so a later job can compare, gate, and report on runs it
+  did not produce. Outcomes, scores, subscores, tags, and weights round-trip
+  exactly.
+- `agenteval run --rate-limit` and `--retry-backoff`;
+  `agenteval compare --max-tag-drop` and `--min-tag-tasks`.
 
 ### Fixed
 - `timeout_s` no longer waits on the worker it just abandoned: the executor is
@@ -36,6 +45,14 @@ call real APIs.
   thread instead of stalling the evaluation.
 - Parallel runs deliver `on_result` callbacks as tasks complete rather than in
   one batch at the end, so `progress=True` tracks a live run.
+- `StructuralGrader(ignore_order=True)` scored an expected empty list as a total
+  miss instead of a match, which dragged down any object containing one.
+- The no-jsonschema fallback in `JSONSchemaGrader` accepted `True` where an
+  integer or number was required, and never looked inside `properties`.
+- `agenteval compare` and `agenteval report` reimplemented the comparison and
+  summary logic against raw JSON, so they had drifted from the library: no
+  McNemar test, no effect size, no per-tag view. Both now load the run and call
+  the same functions the Python API does.
 
 ### Changed
 - `evaluate()` rejects `max_parallel < 1` and negative `retries` with

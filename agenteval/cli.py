@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 
 from agenteval.graders.base import GraderRegistry
@@ -9,7 +8,6 @@ from agenteval.report import run_to_markdown, run_to_text
 from agenteval.stats import (
     minimum_detectable_effect,
     required_sample_size,
-    wilson_interval,
 )
 from agenteval.suites import load_suite, validate_suite
 
@@ -69,26 +67,13 @@ def cmd_power(args) -> int:
 
 
 def cmd_report(args) -> int:
-    with open(args.run) as f:
-        payload = json.load(f)
+    from agenteval.report import load_run, tag_breakdown
 
-    summary = payload.get("summary", {})
-    meta = payload.get("metadata", {})
-
-    passed = summary.get("passed", 0)
-    failed = summary.get("failed", 0)
-    ci = wilson_interval(passed, passed + failed)
-
-    print(f"Suite:  {meta.get('suite', '?')}")
-    print(f"System: {meta.get('system', '?')}")
-    print(f"Run:    {meta.get('run_id', '?')}  seed={meta.get('seed', '?')}")
-    print()
-    print(f"  tasks      {summary.get('tasks', 0)}")
-    print(f"  passed     {passed}")
-    print(f"  failed     {failed}")
-    print(f"  errored    {summary.get('errored', 0)}")
-    print(f"  pass rate  {summary.get('pass_rate', 0):.1%}  (95% CI {ci.low:.1%} - {ci.high:.1%})")
-    print(f"  mean score {summary.get('mean_score', 0):.4f}")
+    run = load_run(args.run)
+    print(run_to_text(run))
+    if run.by_tag():
+        print()
+        print(tag_breakdown(run))
     return 0
 
 
@@ -183,58 +168,36 @@ def cmd_run(args) -> int:
 
 
 def cmd_compare(args) -> int:
-    import json as _json
+    from agenteval.compare import compare, regression_gate, tag_regression_gate
+    from agenteval.report import load_run
 
-    from agenteval.stats import paired_bootstrap_diff, permutation_test, wilson_interval
+    base = load_run(args.baseline)
+    cand = load_run(args.candidate)
 
-    with open(args.baseline, encoding="utf-8") as f:
-        base = _json.load(f)
-    with open(args.candidate, encoding="utf-8") as f:
-        cand = _json.load(f)
-
-    base_scores = {r["task_id"]: r for r in base.get("results", [])}
-    cand_scores = {r["task_id"]: r for r in cand.get("results", [])}
-    shared = [t for t in base_scores if t in cand_scores]
-
-    if not shared:
+    comparison = compare(base, cand, iterations=args.iterations, seed=args.seed)
+    if not comparison.paired_ids:
         print("no overlapping task ids between the two runs")
         return 2
 
-    b = [float(base_scores[t].get("score", 0.0)) for t in shared]
-    c = [float(cand_scores[t].get("score", 0.0)) for t in shared]
-    b_pass = [base_scores[t]["outcome"] == "pass" for t in shared]
-    c_pass = [cand_scores[t]["outcome"] == "pass" for t in shared]
+    print(comparison.summary())
 
-    delta = paired_bootstrap_diff(b, c, iterations=args.iterations, seed=args.seed)
-    sig = permutation_test(b, c, iterations=args.iterations, seed=args.seed)
-    broken = [t for t in shared if base_scores[t]["outcome"] == "pass" and cand_scores[t]["outcome"] != "pass"]
-    fixed = [t for t in shared if base_scores[t]["outcome"] != "pass" and cand_scores[t]["outcome"] == "pass"]
+    failed = False
+    if args.max_tag_drop is not None:
+        tags = tag_regression_gate(
+            base, cand, max_drop=args.max_tag_drop, min_tasks=args.min_tag_tasks,
+            iterations=args.iterations, seed=args.seed,
+        )
+        if tags.gates:
+            print()
+            print("Per-tag regression gates:")
+            print(tags.summary())
+        failed = failed or not tags.passed
 
-    print(f"{base.get('metadata',{}).get('system','baseline')} -> "
-          f"{cand.get('metadata',{}).get('system','candidate')}  ({len(shared)} paired tasks)")
-    print()
-    print(f"  baseline  {wilson_interval(sum(b_pass), len(b_pass))}")
-    print(f"  candidate {wilson_interval(sum(c_pass), len(c_pass))}")
-    print(f"  delta     {delta}")
-    print(f"  {sig}")
-    print()
-    print(f"  fixed  ({len(fixed)}): {', '.join(fixed[:8])}")
-    print(f"  broken ({len(broken)}): {', '.join(broken[:8])}")
-    print()
+    if args.fail_on_regression:
+        gates = regression_gate(comparison, max_broken=args.max_broken)
+        failed = failed or not gates.passed
 
-    if delta.low > 0:
-        verdict = "IMPROVEMENT"
-    elif delta.high < 0:
-        verdict = "REGRESSION"
-    else:
-        verdict = "INCONCLUSIVE"
-    print(f"  VERDICT: {verdict}")
-    if verdict == "INCONCLUSIVE":
-        print("  (confidence interval spans zero - not enough evidence either way)")
-
-    if args.fail_on_regression and (verdict == "REGRESSION" or len(broken) > args.max_broken):
-        return 1
-    return 0
+    return 1 if failed else 0
 
 
 def cmd_graders(args) -> int:
@@ -304,6 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-on-regression", action="store_true",
                    help="exit non-zero on a significant regression or too many broken tasks")
     p.add_argument("--max-broken", type=int, default=0)
+    p.add_argument("--max-tag-drop", type=float, default=None,
+                   help="exit non-zero if any tag's mean score drops by more than this")
+    p.add_argument("--min-tag-tasks", type=int, default=5,
+                   help="tags with fewer paired tasks are reported but not gated")
     p.set_defaults(func=cmd_compare)
 
     return parser

@@ -70,6 +70,26 @@ Two tasks broke, and the tool still refuses to call it a regression, because at 
 it cannot tell that apart from noise. Regression *gates* still fire on the concrete breakage, so
 you can block a merge without pretending the aggregate difference is proven.
 
+### An aggregate win can hide a slice that broke
+
+```python
+from agenteval import compare_by_tag, tag_regression_gate
+
+print(tag_regression_gate(baseline_run, candidate_run, max_drop=0.05).summary())
+```
+
+```
+  [PASS] tag:easy: observed 0.0000 vs threshold 0.0500 - 20 paired tasks, mean score +0.0000
+  [FAIL] tag:safety: observed 0.3750 vs threshold 0.0500 - 8 paired tasks, broken: s0, s1, s2
+```
+
+Overall pass rate moved from 100% to 89% and the aggregate verdict is INCONCLUSIVE, which is
+correct at that sample size. The safety slice still lost three tasks, and that is what blocks
+the merge. Tags with fewer than `min_tasks` paired tasks are printed but never enforced, because
+a one-task swing in a five-task slice is noise, and a gate that cries wolf gets ignored.
+
+`compare_by_tag()` returns the full `Comparison` per tag if you want the intervals.
+
 ### Comparing many systems inflates false positives
 
 Six pairwise tests at α=0.05 will hand you a "winner" by luck. `compare_all` corrects for it:
@@ -265,14 +285,19 @@ clean = clean_suite(suite, report)
 ```bash
 agenteval run suite.jsonl --system mypkg.models:gpt4 --out gpt4.json --html report.html
 agenteval run suite.jsonl --system mypkg.models:gpt4 --parallel 16 --rate-limit 10 --retries 3 --retry-backoff 1.0
-agenteval compare baseline.json candidate.json --fail-on-regression
+agenteval compare baseline.json candidate.json --fail-on-regression --max-tag-drop 0.05
+agenteval report gpt4.json
 agenteval power --baseline 0.7 --delta 0.05     # how many tasks do I actually need?
 agenteval validate suite.jsonl
 agenteval graders
 ```
 
-`run --min-pass-rate 0.9` and `compare --fail-on-regression` exit non-zero, so both drop straight
-into CI.
+`run --min-pass-rate 0.9`, `compare --fail-on-regression`, and `compare --max-tag-drop` all exit
+non-zero, so they drop straight into CI.
+
+Saved runs are not write-only: `load_run("gpt4.json")` gives back an `EvalRun` that every
+comparison, gate, and report function accepts, so a nightly job can save runs and a later job
+can analyse them.
 
 `--system` takes `module:function` and imports it, which executes that module. Point it only at
 code you control. Nothing is auto-discovered.
