@@ -187,7 +187,7 @@ def _graders() -> str:
     assert RubricGrader({"ok": lambda p, t: True}).grade("x", task("q", None)).passed
     assert LLMJudgeGrader(judge_fn=lambda p: "Score: 1").grade("x", task("q", "y")).passed
     assert WeightedGrader({"e": ExactMatchGrader()}).grade("a", task("q", "a")).passed
-    assert len(GraderRegistry.available()) == 15
+    assert len(GraderRegistry.available()) == 18
     return f"{len(GraderRegistry.available())} graders registered and scoring"
 
 
@@ -248,6 +248,36 @@ def _scale() -> str:
     decision = evaluate_sequential(system, suite, ExactMatchGrader(), threshold=0.5, min_samples=10)
     assert decision.decision.stop
     return "streaming, caching, resume, and early stopping all work"
+
+
+@check("agent trajectories")
+def _trajectories() -> str:
+    suite = suite_from_records("agents", [
+        {"id": "t1", "input": "weather in Lahore", "expected": "31C"},
+    ])
+
+    def agent(task):
+        return Trajectory(
+            steps=[
+                Step(action="search", args={"q": task.input}, observation="wttr.in", cost=0.001),
+                Step(action="fetch", args={"url": "wttr.in"}, observation="31C", cost=0.002),
+            ],
+            output="31C",
+        )
+
+    grader = WeightedGrader({
+        "answer": OutcomeGrader(ExactMatchGrader()),
+        "tools": ToolSequenceGrader(["search", "fetch"], mode="exact"),
+        "budget": StepBudgetGrader(max_steps=4, max_cost=0.01, allow_errors=False),
+    }, threshold=0.99)
+
+    run = evaluate(agent, suite, grader)
+    assert run.pass_rate == 1.0, run.results[0].score
+
+    wasteful = Trajectory(steps=[Step(action="search") for _ in range(6)], output="31C")
+    over = StepBudgetGrader(max_steps=4).grade(wasteful, suite.tasks[0])
+    assert not over.passed and 0.0 < over.value < 1.0, over
+    return "trajectory graders score outcome, tool use, and step budget together"
 
 
 @check("stability, contamination, cost")

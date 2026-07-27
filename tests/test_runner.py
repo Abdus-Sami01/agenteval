@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import time
 
@@ -10,15 +11,21 @@ from agenteval import (
     ConfigurationError,
     ExactMatchGrader,
     Outcome,
+    OutcomeGrader,
     RateLimiter,
     RetryPolicy,
     Score,
+    Step,
+    StepBudgetGrader,
     TaskSuite,
+    Trajectory,
+    WeightedGrader,
     evaluate,
     evaluate_async,
     evaluate_many,
     iter_evaluate,
     repeat_evaluate,
+    run_to_json,
     suite_from_records,
 )
 from tests.helpers import adder, always_wrong, raises
@@ -431,3 +438,44 @@ class TestEvaluateAsync:
         start = time.perf_counter()
         asyncio.run(evaluate_async(system, suite, ExactMatchGrader(), rate_limiter=limiter))
         assert time.perf_counter() - start >= 5 / 100.0
+
+
+class TestTrajectorySystems:
+    def agent(self, task):
+        a, b = str(task.input).split("+")
+        return Trajectory(
+            steps=[Step(action="parse"), Step(action="add", cost=0.01)],
+            output=str(int(a) + int(b)),
+        )
+
+    def test_evaluates_an_agent_end_to_end(self, math_suite):
+        run = evaluate(self.agent, math_suite, OutcomeGrader(ExactMatchGrader()))
+        assert run.pass_rate == 1.0
+
+    def test_trajectory_survives_into_the_result(self, small_suite):
+        run = evaluate(self.agent, small_suite, OutcomeGrader(ExactMatchGrader()))
+        assert isinstance(run.results[0].prediction, Trajectory)
+        assert run.results[0].prediction.actions == ["parse", "add"]
+
+    def test_json_report_keeps_the_steps(self, small_suite):
+        run = evaluate(self.agent, small_suite, OutcomeGrader(ExactMatchGrader()))
+        payload = json.loads(run_to_json(run))
+        prediction = payload["results"][0]["prediction"]
+        assert [s["action"] for s in prediction["steps"]] == ["parse", "add"]
+        assert prediction["output"] == "2"
+
+    def test_process_failure_fails_the_task(self, small_suite):
+        grader = WeightedGrader({
+            "answer": OutcomeGrader(ExactMatchGrader()),
+            "budget": StepBudgetGrader(max_steps=1),
+        }, threshold=0.99)
+        run = evaluate(self.agent, small_suite, grader)
+        assert run.pass_rate == 0.0
+        assert run.results[0].score.subscores["answer"] == 1.0
+
+    def test_async_agent_is_supported(self, small_suite):
+        async def async_agent(task):
+            return self.agent(task)
+
+        run = asyncio.run(evaluate_async(async_agent, small_suite, OutcomeGrader(ExactMatchGrader())))
+        assert run.pass_rate == 1.0

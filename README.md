@@ -140,7 +140,7 @@ print(validate_judge(my_judge, labeled_examples).summary())
 
 ## Graders
 
-15 built in, all sharing one interface:
+18 built in, all sharing one interface:
 
 | grader | use |
 | --- | --- |
@@ -159,8 +159,47 @@ print(validate_judge(my_judge, labeled_examples).summary())
 | `RubricGrader` | weighted named criteria |
 | `LLMJudgeGrader` | model-graded, with robust score parsing |
 | `WeightedGrader` | combine several graders |
+| `OutcomeGrader` | run any grader above against an agent's final answer |
+| `ToolSequenceGrader` | which tools were called, and in what order |
+| `StepBudgetGrader` | step, cost, and failed-call budgets |
 
 Custom graders subclass `Grader` and implement `grade(prediction, task) -> Score`.
+
+---
+
+## Agents
+
+A pass rate alone will not tell you whether an agent got there sensibly. Return a `Trajectory`
+from the system under test and the process gets graded alongside the answer: which tools it
+called, how many steps it burned, what it spent, and which calls failed.
+
+```python
+def agent(task):
+    return Trajectory(
+        steps=[
+            Step(action="search", args={"q": task.input}, observation=hits, cost=0.001),
+            Step(action="fetch", args={"url": hits[0]}, observation=page, cost=0.002),
+        ],
+        output="31C",
+    )
+
+grader = WeightedGrader({
+    "answer": OutcomeGrader(ExactMatchGrader()),
+    "tools":  ToolSequenceGrader(["search", "fetch"], forbidden=["delete_database"]),
+    "budget": StepBudgetGrader(max_steps=8, max_cost=0.05, allow_errors=False),
+}, threshold=0.99)
+
+run = evaluate(agent, suite, grader)
+```
+
+`OutcomeGrader` adapts any of the 15 output graders to a trajectory, so nothing above is
+agent-specific. `ToolSequenceGrader` runs `exact`, `subsequence`, or `set`, and gives partial
+credit for the fraction of expected calls matched. Budgets decay to zero at twice the limit
+instead of snapping, so a small overrun still ranks above a large one. Trajectories serialize
+into the JSON report with their steps intact, so a regression in tool use is visible in a diff.
+
+If your agent already emits step dicts, `Trajectory.from_records()` accepts the usual key names
+(`tool`/`action`, `input`/`args`, `output`/`observation`).
 
 ---
 

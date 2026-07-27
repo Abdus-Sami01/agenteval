@@ -4,6 +4,7 @@ import pytest
 
 from agenteval import (
     CallableGrader,
+    ConfigurationError,
     ContainsGrader,
     EditDistanceGrader,
     ExactMatchGrader,
@@ -13,14 +14,19 @@ from agenteval import (
     JSONSchemaGrader,
     LLMJudgeGrader,
     NumericGrader,
+    OutcomeGrader,
     PredicateGrader,
     RangeGrader,
     RegexGrader,
     RubricGrader,
     Score,
     SetGrader,
+    Step,
+    StepBudgetGrader,
     StructuralGrader,
     Task,
+    ToolSequenceGrader,
+    Trajectory,
     UnknownGraderError,
     WeightedGrader,
     normalize_text,
@@ -400,7 +406,7 @@ class TestLLMJudge:
 
 class TestRegistry:
     def test_all_graders_registered(self):
-        assert len(GraderRegistry.available()) == 15
+        assert len(GraderRegistry.available()) == 18
 
     def test_create_by_name(self):
         assert isinstance(GraderRegistry.create("exact"), ExactMatchGrader)
@@ -436,3 +442,200 @@ class TestScoreClamping:
     def test_base_grader_is_abstract(self):
         with pytest.raises(NotImplementedError):
             Grader().grade("x", make_task(None))
+
+
+def trajectory(actions, output="ok", **kw):
+    return Trajectory(steps=[Step(action=a, **kw) for a in actions], output=output)
+
+
+class TestTrajectoryType:
+    def test_actions_and_length(self):
+        traj = trajectory(["search", "fetch", "answer"])
+        assert traj.actions == ["search", "fetch", "answer"]
+        assert len(traj) == 3
+
+    def test_counts_repeated_actions(self):
+        assert trajectory(["search", "search", "fetch"]).count("search") == 2
+
+    def test_totals_roll_up(self):
+        traj = Trajectory(steps=[
+            Step(action="a", cost=0.5, elapsed_ms=10.0),
+            Step(action="b", cost=0.25, elapsed_ms=5.0),
+        ])
+        assert traj.total_cost == 0.75
+        assert traj.total_ms == 15.0
+
+    def test_failed_steps_isolated(self):
+        traj = Trajectory(steps=[Step(action="a"), Step(action="b", error="429 rate limited")])
+        assert [s.action for s in traj.failed_steps] == ["b"]
+        assert traj.steps[0].ok and not traj.steps[1].ok
+
+    def test_from_records_accepts_common_key_names(self):
+        traj = Trajectory.from_records(
+            [{"tool": "search", "input": {"q": "x"}, "output": "hit"},
+             {"action": "fetch", "args": {"url": "u"}, "observation": "body", "cost": 0.02}],
+            output="done", model="gpt-4o",
+        )
+        assert traj.actions == ["search", "fetch"]
+        assert traj.steps[0].args == {"q": "x"} and traj.steps[0].observation == "hit"
+        assert traj.total_cost == 0.02
+        assert traj.output == "done" and traj.metadata == {"model": "gpt-4o"}
+
+    def test_as_dict_omits_empty_fields(self):
+        d = Trajectory(steps=[Step(action="a")], output="x").as_dict()
+        assert d["steps"] == [{"action": "a"}]
+        assert d["output"] == "x"
+
+    def test_str_is_readable_and_truncates(self):
+        assert "search -> fetch" in str(trajectory(["search", "fetch"]))
+        assert "8 steps" in str(trajectory([f"s{i}" for i in range(8)]))
+
+    def test_empty_trajectory_renders(self):
+        assert "empty" in str(Trajectory())
+
+
+class TestOutcomeGrader:
+    def test_grades_the_final_output(self):
+        grader = OutcomeGrader(ExactMatchGrader())
+        assert grader.grade(trajectory(["a"], output="42"), Task(id="t", input="q", expected="42")).passed
+
+    def test_ignores_the_steps(self):
+        grader = OutcomeGrader(ExactMatchGrader())
+        assert not grader.grade(trajectory(["a"], output="7"), Task(id="t", input="q", expected="42")).passed
+
+    def test_passes_plain_predictions_through(self):
+        grader = OutcomeGrader(ExactMatchGrader())
+        assert grader.grade("42", Task(id="t", input="q", expected="42")).passed
+
+    def test_accepts_a_bare_step_list(self):
+        grader = OutcomeGrader(ExactMatchGrader())
+        steps = [Step(action="a")]
+        assert not grader.grade(steps, Task(id="t", input="q", expected="42")).passed
+
+    def test_repr_names_the_inner_grader(self):
+        assert "ExactMatchGrader" in repr(OutcomeGrader(ExactMatchGrader()))
+
+
+class TestToolSequenceGrader:
+    task = Task(id="t", input="q", expected=["search", "fetch"])
+
+    def test_exact_match(self):
+        grader = ToolSequenceGrader(["search", "fetch"], mode="exact")
+        assert grader.grade(trajectory(["search", "fetch"]), self.task).passed
+
+    def test_exact_rejects_extra_calls(self):
+        grader = ToolSequenceGrader(["search", "fetch"], mode="exact")
+        score = grader.grade(trajectory(["search", "fetch", "fetch"]), self.task)
+        assert not score.passed and score.value < 1.0
+
+    def test_subsequence_tolerates_detours(self):
+        grader = ToolSequenceGrader(["search", "fetch"], mode="subsequence")
+        assert grader.grade(trajectory(["search", "think", "fetch"]), self.task).passed
+
+    def test_subsequence_requires_order(self):
+        grader = ToolSequenceGrader(["search", "fetch"], mode="subsequence")
+        score = grader.grade(trajectory(["fetch", "search"]), self.task)
+        assert not score.passed and score.value == 0.5
+
+    def test_set_mode_ignores_order(self):
+        grader = ToolSequenceGrader(["search", "fetch"], mode="set")
+        assert grader.grade(trajectory(["fetch", "search"]), self.task).passed
+
+    def test_partial_credit_beats_nothing(self):
+        grader = ToolSequenceGrader(["search", "fetch", "answer"], mode="subsequence")
+        partial = grader.grade(trajectory(["search", "fetch"]), self.task)
+        nothing = grader.grade(trajectory(["nap"]), self.task)
+        assert partial.value == pytest.approx(2 / 3)
+        assert nothing.value == 0.0
+
+    def test_forbidden_tool_zeroes_the_score(self):
+        grader = ToolSequenceGrader(["search"], forbidden=["delete_database"])
+        score = grader.grade(trajectory(["search", "delete_database"]), self.task)
+        assert score.value == 0.0 and "forbidden" in score.detail
+
+    def test_expected_sequence_read_from_task(self):
+        assert ToolSequenceGrader().grade(trajectory(["search", "fetch"]), self.task).passed
+
+    def test_expected_sequence_read_from_task_dict(self):
+        task = Task(id="t", input="q", expected={"tools": ["search"], "answer": "42"})
+        assert ToolSequenceGrader().grade(trajectory(["search"]), task).passed
+
+    def test_missing_expectation_is_reported(self):
+        score = ToolSequenceGrader().grade(trajectory(["search"]), Task(id="t", input="q"))
+        assert not score.passed and "no expected tool sequence" in score.detail
+
+    def test_non_trajectory_prediction_is_reported(self):
+        score = ToolSequenceGrader(["search"]).grade("just a string", self.task)
+        assert not score.passed and "not a Trajectory" in score.detail
+
+    def test_detail_shows_both_sequences(self):
+        score = ToolSequenceGrader(["search", "fetch"]).grade(trajectory(["search"]), self.task)
+        assert "expected" in score.detail and "missing" in score.detail
+
+    def test_unknown_mode_rejected(self):
+        with pytest.raises(ConfigurationError):
+            ToolSequenceGrader(["a"], mode="fuzzy")
+
+
+class TestStepBudgetGrader:
+    task = Task(id="t", input="q", expected=None)
+
+    def test_within_budget_passes(self):
+        assert StepBudgetGrader(max_steps=5).grade(trajectory(["a", "b"]), self.task).passed
+
+    def test_over_budget_fails(self):
+        score = StepBudgetGrader(max_steps=2).grade(trajectory(["a", "b", "c"]), self.task)
+        assert not score.passed and "over budget" in score.detail
+
+    def test_score_decays_with_overrun(self):
+        grader = StepBudgetGrader(max_steps=4)
+        small = grader.grade(trajectory(["a"] * 5), self.task)
+        large = grader.grade(trajectory(["a"] * 7), self.task)
+        assert small.value > large.value > 0.0
+
+    def test_score_floors_at_twice_the_budget(self):
+        assert StepBudgetGrader(max_steps=4).grade(trajectory(["a"] * 40), self.task).value == 0.0
+
+    def test_cost_budget_enforced(self):
+        traj = Trajectory(steps=[Step(action="a", cost=0.5), Step(action="b", cost=0.4)])
+        score = StepBudgetGrader(max_cost=0.5).grade(traj, self.task)
+        assert not score.passed and "cost" in score.detail
+
+    def test_failed_steps_can_be_disallowed(self):
+        traj = Trajectory(steps=[Step(action="a", error="timeout")])
+        assert StepBudgetGrader(allow_errors=False).grade(traj, self.task).passed is False
+        assert StepBudgetGrader(allow_errors=True).grade(traj, self.task).passed is True
+
+    def test_subscores_reported_per_budget(self):
+        traj = Trajectory(steps=[Step(action="a", cost=0.1)])
+        score = StepBudgetGrader(max_steps=2, max_cost=1.0, allow_errors=False).grade(traj, self.task)
+        assert set(score.subscores) == {"steps", "cost", "clean"}
+
+    def test_no_budget_configured_is_a_pass(self):
+        assert StepBudgetGrader().grade(trajectory(["a"] * 99), self.task).passed
+
+    def test_non_trajectory_prediction_is_reported(self):
+        score = StepBudgetGrader(max_steps=1).grade("string", self.task)
+        assert not score.passed and "not a Trajectory" in score.detail
+
+    def test_negative_budget_rejected(self):
+        with pytest.raises(ConfigurationError):
+            StepBudgetGrader(max_steps=-1)
+
+
+class TestTrajectoryComposition:
+    def test_weighted_grader_blends_outcome_and_process(self):
+        task = Task(id="t", input="q", expected="42")
+        grader = WeightedGrader({
+            "answer": OutcomeGrader(ExactMatchGrader()),
+            "tools": ToolSequenceGrader(["search", "fetch"], mode="exact"),
+            "budget": StepBudgetGrader(max_steps=3),
+        }, threshold=0.99)
+
+        good = trajectory(["search", "fetch"], output="42")
+        assert grader.grade(good, task).passed
+
+        right_answer_wrong_process = trajectory(["guess"], output="42")
+        score = grader.grade(right_answer_wrong_process, task)
+        assert not score.passed
+        assert score.subscores["answer"] == 1.0 and score.subscores["tools"] == 0.0

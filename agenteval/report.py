@@ -246,6 +246,14 @@ def _result_to_dict(r: TaskResult, include_predictions: bool) -> dict[str, Any]:
     if r.error:
         d["error"] = r.error
     if include_predictions:
-        d["prediction"] = str(r.prediction)[:500] if r.prediction is not None else None
-        d["expected"] = str(r.expected)[:500] if r.expected is not None else None
+        d["prediction"] = _serialize(r.prediction)
+        d["expected"] = _serialize(r.expected)
     return d
+
+
+def _serialize(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "as_dict"):
+        return value.as_dict()
+    return str(value)[:500]

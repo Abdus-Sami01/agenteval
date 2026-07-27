@@ -5,9 +5,21 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Throughput and failure handling for evaluations that call real APIs.
+Agent trajectories, plus throughput and failure handling for evaluations that
+call real APIs.
 
 ### Added
+- `Trajectory` and `Step`: a system under test can now return the steps it took
+  rather than only a final answer, so tool use, step count, spend, and failed
+  calls are all gradable. `Trajectory.from_records()` accepts the common step
+  dict shapes (`tool`/`action`, `input`/`args`, `output`/`observation`).
+- Three graders for that: `OutcomeGrader` (adapts any existing grader to a
+  trajectory's final output), `ToolSequenceGrader` (`exact`, `subsequence`, or
+  `set` matching, partial credit, forbidden-tool list), and `StepBudgetGrader`
+  (step, cost, and failed-call budgets, decaying to zero at twice the limit).
+  Compose them with `WeightedGrader` to score outcome and process together.
+- Trajectories serialize into the JSON report with their steps intact, so a
+  change in tool use shows up in a report diff.
 - `evaluate_async()` for coroutine systems: concurrency is bounded by an
   asyncio semaphore, so thousands of in-flight calls cost coroutines instead
   of OS threads.
