@@ -3,10 +3,11 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-25
 
 Agent trajectories, per-tag regression gates, and the throughput and failure
-handling an evaluation needs when it is calling real APIs.
+handling an evaluation needs when it is calling real APIs. 595 tests at 94%
+coverage.
 
 ### Added
 - `Trajectory` and `Step`: a system under test can now return the steps it took

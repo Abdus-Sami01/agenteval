@@ -10,6 +10,8 @@ everything is any good. `agenteval` fixes that, and stays out of your way while 
 - **No required dependencies.** Pure Python, including the statistics.
 - **Honest by default.** Comparisons return `INCONCLUSIVE` when the evidence is thin.
 - **Fits your system.** Anything callable that takes a `Task` and returns a prediction.
+- **Grades the process too.** Return a `Trajectory` and tool use, step count, and spend
+  are scored alongside the answer.
 
 ```bash
 pip install agenteval
@@ -365,8 +367,8 @@ file still gives you clean JSON and CI logs stay readable.
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 451 tests
-pytest --cov=agenteval          # with coverage (currently 90%)
+pytest                          # 595 tests
+pytest --cov=agenteval          # with coverage (currently 94%)
 ruff check agenteval tests
 python scripts/verify.py        # post-install self check
 ```
