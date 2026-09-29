@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, TextIO
@@ -37,25 +38,36 @@ class ProgressReporter:
         self._errored = 0
         self._start = time.perf_counter()
         self._last_draw = 0.0
+        self._lock = threading.Lock()
 
         if enabled is None:
             enabled = bool(getattr(self._stream, "isatty", lambda: False)())
         self._enabled = enabled and self._total > 0
 
     def update(self, result: TaskResult) -> None:
-        self._done += 1
-        if result.outcome == Outcome.PASS:
-            self._passed += 1
-        elif result.outcome == Outcome.FAIL:
-            self._failed += 1
-        else:
-            self._errored += 1
+        """Record one finished task.
+
+        Parallel runs call this from worker threads as results land. The lock
+        keeps the tallies and the redraw throttle consistent as a group, so a
+        drawn line never mixes a bumped total with stale outcome counts, and
+        it keeps the counters correct on interpreters without a GIL.
+        """
+        with self._lock:
+            self._done += 1
+            if result.outcome == Outcome.PASS:
+                self._passed += 1
+            elif result.outcome == Outcome.FAIL:
+                self._failed += 1
+            else:
+                self._errored += 1
+
+            now = time.perf_counter()
+            due = self._done >= self._total or (now - self._last_draw) >= self._min_interval
+            if due:
+                self._last_draw = now
 
         logger.debug("task %s -> %s (%.1fms)", result.task_id, result.outcome.value, result.elapsed_ms)
-
-        now = time.perf_counter()
-        if self._done >= self._total or (now - self._last_draw) >= self._min_interval:
-            self._last_draw = now
+        if due:
             self._draw()
 
     def _draw(self) -> None:

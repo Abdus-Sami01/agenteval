@@ -1,5 +1,10 @@
 # agenteval
 
+[![CI](https://github.com/Abdus-Sami01/agenteval/actions/workflows/ci.yml/badge.svg)](https://github.com/Abdus-Sami01/agenteval/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/Abdus-Sami01/agenteval)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](pyproject.toml)
+
 Evaluation harness for LLM systems and agents, with statistics that refuse to overclaim.
 
 Most eval scripts print a single number. That number is usually a coin flip dressed up as a
@@ -14,11 +19,14 @@ everything is any good. `agenteval` fixes that, and stays out of your way while 
   are scored alongside the answer.
 
 ```bash
-pip install agenteval
+pip install git+https://github.com/Abdus-Sami01/agenteval
 ```
 
-Optional extras: `pip install "agenteval[yaml]"` for YAML suites, `"agenteval[schema]"` for
-full JSON-Schema grading, `"agenteval[all]"` for both.
+Not on PyPI yet, so install from the repository for now.
+
+Optional extras: append `[yaml]` for YAML suites, `[schema]` for full JSON-Schema grading,
+or `[all]` for both — e.g. `pip install "agenteval[all] @ git+https://github.com/Abdus-Sami01/agenteval"`.
+Neither is required; both have working fallbacks.
 
 ---
 

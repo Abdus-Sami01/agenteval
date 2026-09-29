@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- `PredictionCache.wrap()` treated a cached `None` as a miss, so a system that
+  legitimately answers `None` was re-executed on every run and never actually
+  cached. Misses are now detected with a sentinel, and `get()` takes a
+  `default` so callers can tell "absent" from "cached None".
+- Saving a cache coerced unserializable predictions to strings, so a reloaded
+  `Trajectory` came back as its `repr` and was silently graded as text.
+  Entries that cannot round-trip through JSON are now left out of the file and
+  logged, because a cache miss is better than a changed prediction.
+- `ProgressReporter.update()` now takes a lock. Parallel runs call it from
+  worker threads, and without it a drawn line could mix a bumped total with
+  stale outcome counts; it also keeps the tallies correct without a GIL.
+- `PredictionCache.has()` read the entry map without the lock.
+
+### Changed
+- CI runs on every branch push and on `v*` tags, not just `main` and pull
+  requests, so work on a branch is not unverified until it merges.
+- The build job now installs the built sdist into a clean virtualenv and runs
+  the suite, the self check, and the CLI from it, installs the wheel bare to
+  prove it pulls in no dependencies, and on a tag checks the tag against
+  `__version__`.
+- README documents the install command that actually works today; the package
+  is not on PyPI yet.
+
 ## [0.3.0] - 2026-09-25
 
 Agent trajectories, per-tag regression gates, and the throughput and failure

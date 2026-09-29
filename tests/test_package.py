@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,13 @@ from agenteval import (
     ConfigurationError,
     ExactMatchGrader,
     GraderError,
+    Outcome,
     PairedLengthError,
     ProgressReporter,
     StatisticsError,
     SuiteError,
     SuiteFormatError,
+    TaskResult,
     UnknownGraderError,
     configure_logging,
     evaluate,
@@ -202,3 +205,54 @@ class TestReproducibility:
     def test_notes_are_carried(self, small_suite):
         run = evaluate(adder, small_suite, ExactMatchGrader(), notes="ablation A")
         assert run.metadata.notes == "ablation A"
+
+
+class TestProgressUnderParallelism:
+    def result(self, task_id, outcome=Outcome.PASS):
+        return TaskResult(task_id=task_id, outcome=outcome)
+
+    def test_total_is_exact_after_concurrent_updates(self):
+        stream = io.StringIO()
+        total = 2000
+        reporter = ProgressReporter(total=total, stream=stream, enabled=False)
+        results = [self.result(f"t{i}") for i in range(total)]
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(reporter.update, results))
+
+        reporter.finish()
+        assert reporter._done == total
+
+    def test_tallies_are_exact_after_concurrent_updates(self):
+        stream = io.StringIO()
+        outcomes = ([Outcome.PASS] * 600) + ([Outcome.FAIL] * 300) + ([Outcome.ERROR] * 100)
+        reporter = ProgressReporter(total=len(outcomes), stream=stream, enabled=False)
+        results = [self.result(f"t{i}", o) for i, o in enumerate(outcomes)]
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(reporter.update, results))
+
+        assert (reporter._passed, reporter._failed, reporter._errored) == (600, 300, 100)
+
+    def test_drawn_line_is_never_torn(self):
+        """Every rendered line must show tallies that add up to its own total."""
+        stream = io.StringIO()
+        outcomes = [Outcome.PASS, Outcome.FAIL, Outcome.ERROR] * 400
+        reporter = ProgressReporter(total=len(outcomes), stream=stream, enabled=True,
+                                    min_interval_s=0)
+        results = [self.result(f"t{i}", o) for i, o in enumerate(outcomes)]
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(reporter.update, results))
+
+        for line in stream.getvalue().split("\r"):
+            match = re.search(r"(\d+)/(\d+)", line)
+            if match:
+                assert int(match.group(1)) <= int(match.group(2))
+
+    def test_parallel_evaluation_reports_every_task(self, math_suite):
+        stream = io.StringIO()
+        reporter = ProgressReporter(total=len(math_suite), stream=stream, enabled=True, min_interval_s=0)
+        evaluate(adder, math_suite, ExactMatchGrader(), max_parallel=8, on_result=reporter.update)
+        reporter.finish()
+        assert "30/30" in stream.getvalue()

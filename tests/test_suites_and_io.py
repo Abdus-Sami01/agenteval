@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from agenteval import (
+    ConfigurationError,
     ExactMatchGrader,
     OutcomeGrader,
     PredictionCache,
@@ -777,3 +778,103 @@ class TestRecordCoercion:
         assert restored.tasks[0].tags == ("safety",)
         assert restored.tasks[0].weight == 2.0
         assert restored.tasks[0].metadata["note"] == "keep"
+
+
+class TestCacheCorrectness:
+    def test_a_cached_none_is_not_re_executed(self, small_suite):
+        calls = {"n": 0}
+
+        def returns_none(task):
+            calls["n"] += 1
+            return None
+
+        cache = PredictionCache()
+        wrapped = cache.wrap(returns_none, "s")
+        for task in small_suite.tasks:
+            wrapped(task)
+        for task in small_suite.tasks:
+            wrapped(task)
+
+        assert calls["n"] == 3, "a cached None must count as a hit, not a miss"
+        assert cache.size == 3
+
+    def test_falsy_predictions_are_cached(self, small_suite):
+        calls = {"n": 0}
+
+        def returns_empty(task):
+            calls["n"] += 1
+            return ""
+
+        cache = PredictionCache()
+        wrapped = cache.wrap(returns_empty, "s")
+        wrapped(small_suite.tasks[0])
+        wrapped(small_suite.tasks[0])
+        assert calls["n"] == 1
+
+    def test_get_reports_misses_with_a_sentinel(self, small_suite):
+        cache = PredictionCache()
+        marker = object()
+        assert cache.get("s", small_suite.tasks[0], default=marker) is marker
+        cache.put("s", small_suite.tasks[0], None)
+        assert cache.get("s", small_suite.tasks[0], default=marker) is None
+
+    def test_unserializable_predictions_are_dropped_not_stringified(self, tmp_path, small_suite):
+        cache = PredictionCache(path=str(tmp_path / "c.json"))
+        cache.put("s", small_suite.tasks[0], object())
+        cache.put("s", small_suite.tasks[1], "fine")
+        cache.save()
+
+        reloaded = PredictionCache(path=str(tmp_path / "c.json"))
+        assert reloaded.size == 1
+        assert reloaded.get("s", small_suite.tasks[1]) == "fine"
+        assert reloaded.get("s", small_suite.tasks[0]) is None
+
+    def test_a_dropped_entry_causes_a_recompute_not_a_wrong_answer(self, tmp_path, small_suite):
+        path = str(tmp_path / "c.json")
+        cache = PredictionCache(path=path)
+        cache.put("s", small_suite.tasks[0], Trajectory(steps=[Step(action="a")], output="2"))
+        cache.save()
+
+        reloaded = PredictionCache(path=path)
+        calls = {"n": 0}
+
+        def system(task):
+            calls["n"] += 1
+            return Trajectory(steps=[Step(action="a")], output=adder(task))
+
+        prediction = reloaded.wrap(system, "s")(small_suite.tasks[0])
+        assert calls["n"] == 1
+        assert isinstance(prediction, Trajectory), "a reload must never change a prediction's type"
+
+    def test_serializable_structures_still_round_trip(self, tmp_path, small_suite):
+        path = str(tmp_path / "c.json")
+        cache = PredictionCache(path=path)
+        cache.put("s", small_suite.tasks[0], {"answer": "2", "steps": [1, 2]})
+        cache.save()
+        assert PredictionCache(path=path).get("s", small_suite.tasks[0]) == {"answer": "2", "steps": [1, 2]}
+
+    def test_version_mismatch_discards_the_file(self, tmp_path, small_suite):
+        path = str(tmp_path / "c.json")
+        old = PredictionCache(path=path, version="v1")
+        old.put("s", small_suite.tasks[0], "stale")
+        old.save()
+
+        fresh = PredictionCache(path=path, version="v2")
+        assert fresh.size == 0
+
+    def test_corrupt_cache_file_is_ignored(self, tmp_path):
+        path = tmp_path / "c.json"
+        path.write_text("{not json", encoding="utf-8")
+        cache = PredictionCache(path=str(path))
+        assert cache.size == 0 and cache.load() is False
+
+    def test_save_without_a_path_is_a_configuration_error(self):
+        with pytest.raises(ConfigurationError):
+            PredictionCache().save()
+
+    def test_has_matches_get(self, small_suite):
+        cache = PredictionCache()
+        task = small_suite.tasks[0]
+        assert not cache.has("s", task)
+        cache.put("s", task, None)
+        assert cache.has("s", task)
